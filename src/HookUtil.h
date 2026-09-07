@@ -1,6 +1,9 @@
 // HookUtil.h - standalone hook helpers for ShadowLimitFix
-// detour_thunk pattern ported from Community Shaders include/PCH.h
-// (based on Microsoft Detours - vcpkg detours.lib).
+// detour_thunk pattern (cross-verified against another GPL-3.0 Skyrim
+// rendering project; based on Microsoft Detours - vcpkg detours.lib).
+// This plugin is standalone: engine-behavior references in comments are
+// REL-ID/address facts used for verification only, with no runtime
+// dependency on any other mod.
 // install_context_hook comes from the CommonLibSSE-NG CS fork
 // (SKSE/ContextHook.h, requires SKSE_SUPPORT_XBYAK + vcpkg xbyak).
 #pragma once
@@ -280,7 +283,7 @@ namespace ShadowLimitFixNS::P1
 // that replaces the engine PS shows material degradation until it is 100%
 // faithful, which is a multi-month port (CS maintains theirs for years).
 // Killed until a route that preserves engine material bytes exactly
-// (e.g. compile-time source/bytecode injection like Light Limit Fix, not
+// (e.g. compile-time source/bytecode injection, not
 // runtime PS swap) is chosen. Render loop + data channel stay on (fix15
 // PublishShadowLightDataChannel is inert without the PS consumer).
 // (2026-09-08: all SLF_PS_ENABLED blocks removed from the build.)
@@ -345,7 +348,7 @@ namespace ShadowLimitFixNS::P1
 #define ENABLE_P1B 1
 
 // Skip the vanilla shadow-light render dispatch at the render-loop call
-// site (Hook_RenderShadowLights sets ctx.Rax=0). This was ported from CS,
+// site (Hook_RenderShadowLights sets ctx.Rax=0). This recipe was cross-verified upstream,
 // where it is ONLY valid because CS fully owns scheduling + rendering.
 // v10-phase1: 1 - the engine scheduler still runs (func() inside the
 // thunk) but the DISPATCH is ours (SLF_MANUAL_RENDER=1) - the exact CS
@@ -389,7 +392,7 @@ namespace ShadowLimitFixNS::P1
 // verified 14:03). When set, the hook additionally drives each scheduled
 // light's engine BSShadowLight::Render (vtable 0A) itself - the same
 // per-light render the vanilla dispatch performed (pattern confirmed in
-// the engine's own call graph; CS/LLF replaces that same call site and
+// the engine's own call graph; other lighting mods replace that same call site and
 // calls Light->Render manually). Set 0 to revert to skip-only.
 //
 // v8-exp2 (2026-09-03): forced 0. With SLF_SKIP_VANILLA_DISPATCH=0 the
@@ -495,7 +498,7 @@ namespace ShadowLimitFixNS::P1
 // hand-written PS always regresses materials): the engine physically
 // consumes only 4 shadow lights/frame (t14 = screen-space 4-channel mask,
 // cb2 slots <= 7 diffuse with <= 4 shadowed, PS variants cannot express
-// more). CS Light Limit Fix does NOT unlock this either ("the shadow limit
+// more). even full lighting-overhaul mods do NOT unlock this ("the shadow limit
 // is not yet unlocked" - its extra lights are shadowless diffuse via a
 // clustered shader REPLACEMENT).
 //

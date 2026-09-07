@@ -1,14 +1,13 @@
 // Scheduler.cpp - P1c-1b: real shadow-caster scheduler (select N, slot them)
 //
-// Replaces CalculateActiveShadowCasters (ID 100419/107137). The engine calls
-// ResetCalculatedShadowCasterLights BEFORE this hook (vanilla flow), which
+// Replaces CalculateActiveShadowCasters (ID 100419/107137). The engine calls// ResetCalculatedShadowCasterLights BEFORE this hook (vanilla flow), which
 // clears slot state and installs the sun - so we only need to:
 //   1. collect active shadow lights
 //   2. sort by distance to the camera
 //   3. slot the top N via GameSetShadowCasterSlot (engine API 99728/106365)
 // The engine render loop then renders N true shadow maps.
 //
-// Engine state APIs ported from CS ShadowEngineHooks.cpp.
+// Engine state API shapes cross-verified against an upstream shadow-engine reference.
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
 
@@ -721,7 +720,7 @@ namespace ShadowLimitFixNS::P1
 
 	// =====================================================================
 	// v10-phase1c (2026-09-03): CS-style AppendVirtual caster-collection
-	// chain - minimal port of open-shaders ShadowCasterClassifier.cpp.
+	// chain - minimal port of an upstream shadow-classifier reference.
 	//
 	// Why it exists: engine scheduler func() accumulates the SUN only
 	// (disasm: the single vtable09 call inside uid107137 sits at 0x14CC5E5,

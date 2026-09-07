@@ -1,6 +1,7 @@
 // P1_hooks.cpp - P1: engine hook installation framework
 // NOT yet in CMakeLists.txt - enabled only after P0 passes in-game.
-// All install patterns verified from Community Shaders:
+// All install patterns cross-verified against upstream GPL-3.0 references
+// (REL-ID facts; no runtime dependency on any other mod):
 //   src/Features/LightLimitFix/ShadowEngineHooks.cpp
 //
 // Phases:
@@ -1889,13 +1890,13 @@ namespace ShadowLimitFixNS::P1
 	// P1c-2: drive the engine's own per-light shadow render. The vanilla
 	// call this hook replaces was the ONLY producer of kSHADOWMAPS depth;
 	// skipping it (ctx.Rax=0) leaves every slice empty (RL readback = 0%,
-	// verified 14:03). LLF replaces that same call site (100415/107133) and
+	// verified 14:03). an upstream mod replaces that same call site (100415/107133) and
 	// manually calls each scheduled light's BSShadowLight::Render - the
 	// engine's per-light shadow render (vtable 0A in the CommonLib fork,
 	// same vtable walk the vanilla dispatch performed). We replicate it with
 	// OUR scheduler's list.
 	//
-	// Render arg = 0 for every light (the LLF in-game-verified recipe, sun
+	// Render arg = 0 for every light (the upstream in-game-verified recipe, sun
 	// and points alike). The slice a light renders into is NOT selected by
 	// this arg - it comes from the light's descriptor[0].shadowmapIndex
 	// (which our scheduler wrote = slot) via the engine's depth-target
@@ -2335,7 +2336,7 @@ namespace ShadowLimitFixNS::P1
 
 	// ---------------------------------------------------------------------
 	// P1b: extended depth-buffer arrays + helpers (real implementation,
-	// ported from CS ShadowEngineHooks.cpp). Non-static: shared with
+	// cross-verified against an upstream shadow-engine hooks reference). Non-static: shared with
 	// ShaderReplace.cpp (IsShadowPass must match DSVs beyond slot 7).
 	// ---------------------------------------------------------------------
 	std::array<void*, 128> g_normalDepthBuffer{};

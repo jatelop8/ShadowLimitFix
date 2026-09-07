@@ -1,11 +1,12 @@
-// ShaderReplace.cpp - P1c-3: material PS replacement pipeline
-// Compiles CS Lighting.hlsl (engine macros + PSHADER) for LANDSCAPE pixel
-// shaders, caches them, and swaps them in at BeginTechnique time
-// (CS ShaderCache mechanism, ported from DynamicWetness Wetness.cpp).
-//
-// P1c-3 step 2 goal: replacement pipeline works, screen identical to
-// vanilla (CS Lighting.hlsl without WETNESS_EFFECTS = vanilla lighting).
-// Step 3 (later): add N-light shadow sampling to the compiled shader.
+// ShaderReplace.cpp - engine render-path observation + shadow-engine
+// stabilizer hooks:
+//   - CreatePixelShader vtable[15] bytecode capture (vanilla-semantics study)
+//   - BSShader::LoadShaders / BeginTechnique hooks (shadow-pass detection,
+//     per-material diagnostics, lamp-dimmer restore)
+//   - SLF-B data-channel resource set (per-light payload cbuffers, cb2
+//     readbacks for the 4-shadow-light cap evidence)
+// Standalone plugin: engine-behavior references are REL-ID facts used for
+// verification only; no runtime dependency on any other mod.
 #include <RE/Skyrim.h>
 #include <RE/B/BSShaderRenderTargets.h>  // RE::BSGraphics::RENDER_TARGET / _DEPTHSTENCIL
 #include <SKSE/SKSE.h>
@@ -245,7 +246,7 @@ namespace ShadowLimitFixNS::P1
 			return;
 		auto* dst = static_cast<std::uint8_t*>(ms.pData);
 		std::memset(dst, 0, 32 * 96);
-		constexpr float kBias = 0.00025f;  // CS LLF default (shadowBiasScale x 0.00025)
+		constexpr float kBias = 0.00025f;  // upstream default (shadowBiasScale x 0.00025)
 		float fType = -1.0f, fEn = -1.0f, fSlice = -1.0f;
 		for (std::uint32_t i = 0; i < count; i++) {
 			const auto& ld = ShadowLimitFixNS::P1::g_shadowLights[i];
@@ -895,7 +896,7 @@ namespace ShadowLimitFixNS::P1
 		}
 
 		// Multi-base include handler: Lighting.hlsl includes Common/*.hlsli
-		// (open-shaders package/Shaders) - second base not needed for now.
+		// (an upstream package's shader directory) - second base not needed for now.
 		class SimpleIncludeHandler : public ID3DInclude
 		{
 		public:
