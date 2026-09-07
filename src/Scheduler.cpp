@@ -1866,78 +1866,6 @@ namespace ShadowLimitFixNS::P1
 		}
 	}
 
-#if SLF_POSTLIGHT_ENABLED
-	// ---------------------------------------------------------------------
-	// fix20 (2026-09-06): post-light pass CPU data - EXTENDED lights only.
-	//
-	// The full-screen consumer pass (ShaderReplace.cpp RunPostLightPass,
-	// fired at first ImageSpace BeginTechnique) re-lights every pixel with
-	// the extended lamps that the engine never put in cb2 (invisible today:
-	// SLF renders their shadow maps into the 127-slice array with no
-	// consumer). Engine-scheduled prefix (g_engineLightCount) is excluded -
-	// the engine already lit those in the forward pass, adding them again
-	// would double-light. Walk the LIVE scheduled list directly (index
-	// >= engine count) instead of the packed g_shadowLights so a mid-list
-	// skip can never shift the engine/extended boundary.
-	static void PostFillExtendedLights()
-	{
-		const std::uint32_t eng = ShadowLimitFixNS::P1::g_engineLightCount.load(std::memory_order_acquire);
-		const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
-		std::uint32_t pc = 0;
-		for (std::uint32_t i = eng; i < n && pc < 64; i++) {
-			auto* light = ShadowLimitFixNS::P1::g_scheduledShadowLights[i].light;
-			if (!light || !light->light)
-				continue;
-			auto& rtd = light->GetRuntimeData();
-			const auto& descs = rtd.shadowmapDescriptors;
-			if (descs.empty())
-				continue;
-			auto& pl = ShadowLimitFixNS::P1::g_postLight[pc];
-			pl.pos[0] = light->light->world.translate.x;
-			pl.pos[1] = light->light->world.translate.y;
-			pl.pos[2] = light->light->world.translate.z;
-			pl.radius = light->light->GetLightRuntimeData().radius.x;
-			const auto& lc = light->light->GetLightRuntimeData().diffuse;
-			pl.color[0] = lc.red;
-			pl.color[1] = lc.green;
-			pl.color[2] = lc.blue;
-			pl.intensity = 1.0f;
-			pl.slice = static_cast<float>(descs[0].shadowmapIndex);
-			pl.lightType = (descs.size() >= 2) ? 2.0f : 1.0f;  // omni vs hemi
-			// Step 2 (2026-09-07): carry the shadow-camera transform so the
-			// post-pass can do a REAL shadow test against the t103 slice this
-			// light rendered into. Same construction as the b13 data channel
-			// (PublishShadowLightDataChannel): paraboloid needs the AFFINE
-			// world->light-space matrix only (perspective would corrupt
-			// distance); the paraboloid projection lives in the sample math.
-			const auto& d0 = descs[0];
-			float farF = pl.radius;
-			if (d0.camera) {
-				const float* view = &d0.camera->GetRuntimeData().worldToCam[0][0];
-				for (int k = 0; k < 16; k++)
-					pl.proj[k] = view[k];
-				pl.proj[3] = 0.0f;
-				pl.proj[7] = 0.0f;
-				pl.proj[11] = 0.0f;
-				pl.proj[15] = 1.0f;
-				const auto& fr = d0.camera->GetRuntimeData2().viewFrustum;
-				if (fr.fFar > 1.0f)
-					farF = fr.fFar;
-				pl.flags = 1.0f;
-			} else {
-				for (int k = 0; k < 16; k++)
-					pl.proj[k] = 0.0f;
-				pl.flags = 0.0f;  // no matrix -> no shadow test (diffuse only)
-			}
-			pl.farDist = farF;
-			pc++;
-		}
-		ShadowLimitFixNS::P1::g_postLightCount.store(pc, std::memory_order_release);
-		static uint32_t plLog = 0;
-		if ((plLog++ & 0x7Fu) == 0)
-			SKSE::log::info("[SLF] post-light fill: eng={} sched={} ext={}", eng, n, pc);
-	}
-#endif  // SLF_POSTLIGHT_ENABLED
 
 	void Hook_CalculateActiveShadowCasters::thunk()
 	{
@@ -1987,10 +1915,6 @@ namespace ShadowLimitFixNS::P1
 		// list exists (engine accum + extension). g_shadowLightCount feeds
 		// the fix12 swap gate; g_shadowLights feeds the b13 cbuffer.
 		PublishShadowLightDataChannel();
-#if SLF_POSTLIGHT_ENABLED
-		// fix20: extended-light CPU data for the full-screen consumer pass.
-		PostFillExtendedLights();
-#endif
 		const auto s2 = clk::now();
 		static std::uint64_t s_fNs = 0, s_sNs = 0;
 		static std::uint32_t s_n = 0;

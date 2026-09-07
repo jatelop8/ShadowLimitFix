@@ -179,7 +179,7 @@ namespace ShadowLimitFixNS::P1
 // it renders BLACK (verified 02:50). This plugin is INDEPENDENT - no CS, ENB
 // only. Any future shader work must use engine-semantics shaders written
 // from scratch, NOT CS sources. Engine-side 8-light rendering stays on.
-#define P1C3_ENABLED 0
+// (2026-09-08: all P1C3 blocks removed from the build; no consumer remains.)
 
 // SLF_B2B_ENABLED - the SLF-B consumer-side bytecode patch engine
 // (SlfBytecodePatch.h splices a per-light shadow payload into engine
@@ -240,7 +240,7 @@ namespace ShadowLimitFixNS::P1
 // the global schedule-order LightRec. NOT blind-fixed here (B4e lesson).
 // This build = B2B OFF (engine bytecode pristine = normal picture) so the
 // user can play while the corrected view-space match probe collects data.
-#define SLF_B2B_ENABLED 0
+// (2026-09-08: all SLF_B2B_ENABLED blocks removed from the build.)
 
 // SLF_PS_ENABLED - our OWN engine-semantics Lighting PS replacement
 // (Shaders/Lighting_SLF.hlsl, re-implemented from the vanilla bytecode
@@ -283,7 +283,7 @@ namespace ShadowLimitFixNS::P1
 // (e.g. compile-time source/bytecode injection like Light Limit Fix, not
 // runtime PS swap) is chosen. Render loop + data channel stay on (fix15
 // PublishShadowLightDataChannel is inert without the PS consumer).
-#define SLF_PS_ENABLED 0
+// (2026-09-08: all SLF_PS_ENABLED blocks removed from the build.)
 
 // P1b compile gate - shared across translation units.
 // Set to 1 to build the P1b extended-buffer engine modifications in.
@@ -531,7 +531,7 @@ namespace ShadowLimitFixNS::P1
 // competition). Post pass no longer needed for that state - disable it
 // (also removes its full-screen copy from the frame, the suspected
 // tear-line amplifier). Redline issue parked.
-#define SLF_POSTLIGHT_ENABLED 0
+// (2026-09-08: all SLF_POSTLIGHT_ENABLED blocks removed from the build.)
 
 // fix28 (2026-09-07): user directive - real shadow projection is NOT the
 // goal; the goal is "any number of lights in one space, stable, no crash".
