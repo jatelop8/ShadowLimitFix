@@ -1,0 +1,25 @@
+# Build output
+build/
+*.o
+*.obj
+*.pdb
+*.ilk
+
+# Deployed binaries / backups
+*.bak
+*.dll
+*.exe
+
+# Logs
+*.log
+build_*.txt
+
+# User-specific scratch files
+_t.bat
+test_echo.bat
+*.off
+
+# IDE
+.vs/
+.vscode/
+*.user

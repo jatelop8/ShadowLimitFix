@@ -1,0 +1,51 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": {
+        "major": 4,
+        "minor": 2,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "common",
+            "hidden": true,
+            "cacheVariables": {
+                "SKSE_SUPPORT_XBYAK": "ON"
+            },
+            "binaryDir": "${sourceDir}/build/${presetName}"
+        },
+        {
+            "name": "no-vcpkg",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-no-vcpkg.cmake",
+                "COMMONLIB_DIR": "D:/Modding/open-shaders/extern/CommonLibSSE-NG",
+                "VCPKG_PREFIX": "E:/vcpkg-full/installed/x64-windows-static-md",
+                "ENABLE_SKYRIM_SE": "ON",
+                "ENABLE_SKYRIM_AE": "ON",
+                "ENABLE_SKYRIM_VR": "ON"
+            }
+        },
+        {
+            "name": "win64",
+            "inherits": ["common", "no-vcpkg"],
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "PLUGIN_DEPLOY_DIR": "E:/EJ/mod/mods/ShadowLimitFix",
+                "CMAKE_RC_COMPILER": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe",
+                "CMAKE_MT": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/mt.exe"
+            }
+        },
+        {
+            "name": "NINJA",
+            "inherits": ["win64"]
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "NINJA",
+            "configurePreset": "NINJA"
+        }
+    ]
+}
