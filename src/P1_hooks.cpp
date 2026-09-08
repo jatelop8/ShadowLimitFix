@@ -2053,22 +2053,39 @@ namespace ShadowLimitFixNS::P1
 			// Healthier lights (sceneAccum > 0) are unaffected. Log the
 			// skips so a stall (every light skipped on every frame) is
 			// visible in the log instead of a silent freeze.
+			// fix50 (2026-09-09): the SUN is NEVER rendered through this
+			// list. fix48 exempted it from the sceneAccum skip and rendered
+			// it here, which froze INSIDE engine Render on the first
+			// post-grace dispatch both times it shipped (01:46:21 + 01:59:36
+			// sessions: fix45 pre-render #0 printed, post-render #0 never -
+			// the sun's sceneAccumArray is never filled by any accumulate
+			// we run, and BSShadowLight::Render on an empty-accum
+			// directional light walks the same stall path fix47 skipped
+			// around for point lights; fix49's drawFocusShadows scrub
+			// (focus=0 confirmed in the 01:59 pre-render line) did not
+			// help). The engine has its OWN later-frame sun path that we do
+			// NOT replace (ScheduleShadowCasters dead-code notes 194-208;
+			// D3D trace 14:03 showed clears+draws on the shadow array while
+			// the sun was not in our list = that path is alive and running
+			// empty). Scheduler.cpp fix48 still accumulates the sun's
+			// casters with the armed walk (geomList 2157-2182, verified
+			// 01:59) so the engine-owned sun path has geometry to draw.
+			if (s.light->GetIsDirectionalLight()) {
+				continue;  // sun: engine's own later-frame path renders it
+			}
 			{
 				auto& rtd47 = s.light->GetRuntimeData();
 				const std::uint32_t acc47 = static_cast<std::uint32_t>(rtd47.sceneAccumArray.size());
-				// fix48 (2026-09-09): the sun is EXEMPT from the skip.
-				// Its frustum IS placed by the engine (outdoor [CN]:
-				// dyn=0d DEF=0, real ortho box) and Scheduler.cpp fix48 now
-				// accumulates its casters with the armed walk, but the
-				// engine's sceneAccumArray is never filled by that armed
-				// Accumulate (heal-attach writes geomList instead - point
-				// lights show sceneAccum=0 + geom>0 too), so checking
-				// sceneAccum alone would skip the sun forever -> empty sun
-				// shadow map -> outdoor sun shadow gone (01:30 session).
-				// Point lights keep the sceneAccum==0 skip (post-resume
-				// freeze guard, 01:20:40: DEF=1 unit-frustum lights with a
-				// populated geomList froze inside engine Render).
-				if (acc47 == 0 && !s.light->GetIsDirectionalLight()) {
+				// fix47 (2026-09-09): skip point lights whose engine accum
+				// list is empty - the shadow camera was not yet placed /
+				// every caster was culled during Accumulate (sceneAccum=0)
+				// and engine Render then NEVER returned (fix45 post-render
+				// #0 missing, shadow-array Draws raced ~800k/s on slice 0
+				// for 19 s, OMSet frozen - hard freeze 01:20:40). A light
+				// with an empty accum list rasterizes zero pixels anyway,
+				// so skip it until the engine settles - the list fills on
+				// a later frame once the camera/frustum is live.
+				if (acc47 == 0) {
 					static std::uint32_t s_skip47 = 0;
 					if (diagLights || (s_skip47++ & 0x3Fu) == 0) {
 						SKSE::log::info("[SLF] fix47 skip light#{} slot={} sceneAccum=0 geom={} nd={} idx0={} (accum empty - camera not settled)",
