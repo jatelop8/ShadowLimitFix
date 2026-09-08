@@ -1256,9 +1256,17 @@ namespace ShadowLimitFixNS::P1
 			const auto& d0 = descs[0];
 
 			// ---- caster collection: v10-phase1c (CS AppendVirtual chain) ----
-			// func() accumulated the SUN itself, so it is published but never
-			// re-accumulated here (its geometry is already collected by the
-			// engine's own walk inside func()).
+			// fix48 (2026-09-09): the SUN runs the SAME armed caster walk
+			// as point lights. The old assumption (func() accumulated the
+			// sun) is false in our hook environment: func() accumulates the
+			// sun with NO CurrentCullLight armed, so the AppendVirtual
+			// hooks (which need the owning light, see below) drop every
+			// caster -> sun geomList stays 0 -> the manual dispatch renders
+			// an EMPTY sun shadow -> outdoor sun shadow gone (01:30 session:
+			// [CN] slot0 dyn=0d acc=0 geom=0 DEF=0 - frustum placed by
+			// UpdateCamera but zero casters collected; fix47 then skipped it
+			// every frame). Accumulate with the owning light armed exactly
+			// like the point lights below so heal-attach fills geomList.
 			//
 			// Non-directional engine lights were only Enabled+slotted by
 			// func(); in vanilla their cull walk runs inside the render
@@ -1269,8 +1277,7 @@ namespace ShadowLimitFixNS::P1
 			// run that walk here, CS-style, with the current-cull-light armed:
 			// the hooks heal-attach every visible caster onto the light's
 			// geomList - exactly what our manual Render rasterizes.
-			const bool isDir = light->GetIsDirectionalLight();
-			if (!isDir) {
+			{
 				const auto pd = GetDescriptorReadiness(light);
 				const std::uint32_t smc = static_cast<std::uint32_t>(light->shadowMapCount);
 				const std::uint32_t idx = d0.shadowmapIndex;

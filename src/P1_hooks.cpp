@@ -2056,7 +2056,19 @@ namespace ShadowLimitFixNS::P1
 			{
 				auto& rtd47 = s.light->GetRuntimeData();
 				const std::uint32_t acc47 = static_cast<std::uint32_t>(rtd47.sceneAccumArray.size());
-				if (acc47 == 0) {
+				// fix48 (2026-09-09): the sun is EXEMPT from the skip.
+				// Its frustum IS placed by the engine (outdoor [CN]:
+				// dyn=0d DEF=0, real ortho box) and Scheduler.cpp fix48 now
+				// accumulates its casters with the armed walk, but the
+				// engine's sceneAccumArray is never filled by that armed
+				// Accumulate (heal-attach writes geomList instead - point
+				// lights show sceneAccum=0 + geom>0 too), so checking
+				// sceneAccum alone would skip the sun forever -> empty sun
+				// shadow map -> outdoor sun shadow gone (01:30 session).
+				// Point lights keep the sceneAccum==0 skip (post-resume
+				// freeze guard, 01:20:40: DEF=1 unit-frustum lights with a
+				// populated geomList froze inside engine Render).
+				if (acc47 == 0 && !s.light->GetIsDirectionalLight()) {
 					static std::uint32_t s_skip47 = 0;
 					if (diagLights || (s_skip47++ & 0x3Fu) == 0) {
 						SKSE::log::info("[SLF] fix47 skip light#{} slot={} sceneAccum=0 geom={} nd={} idx0={} (accum empty - camera not settled)",
