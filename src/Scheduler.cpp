@@ -1877,12 +1877,42 @@ namespace ShadowLimitFixNS::P1
 	// rebuilds shadow state and SLF must not write engine shadow data.
 	// LoadingMenu covers fast travel / loads; a huge per-frame camera jump
 	// (checked at low rate) catches quick-travel teleports without the menu.
+	// fix42 (2026-09-08): gate with a cooldown tail. fix41 only froze while
+	// the load UI was open; a save/load closes LoadingMenu the instant the
+	// world is placed while cells/NPCs/shadow state are still streaming in,
+	// and SLF resumed full engine-state writes the same frame -> engine
+	// dispatch hit freed objects (SkyrimSE+14F3E4A call [rax+0x10], WER
+	// 0xc0000005, no CrashLogger dump: 22:27/22:31/22:44 sessions, also with
+	// AdvancedSkinFix disabled). Keep ALL SLF writes frozen for ~120
+	// scheduler invocations (~2 s) after the load UI closes or a camera
+	// jump, then resume.
 	static bool WorldSwitching()
 	{
+		enum class Gate : std::uint8_t { kNone, kOpen, kCooldown };
+		static constexpr std::uint32_t kCooldownTicks = 120;
+		static Gate s_gate = Gate::kNone;
+		static std::uint32_t s_cooldown = 0;
+		static std::uint32_t s_log = 0;
+
 		auto* ui = RE::UI::GetSingleton();
 		if (ui && (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
-					  ui->IsMenuOpen(RE::MainMenu::MENU_NAME)))
+					  ui->IsMenuOpen(RE::MainMenu::MENU_NAME))) {
+			// Load UI open: keep frozen (menu may reopen mid-transition).
+			if (s_gate != Gate::kOpen) {
+				s_gate = Gate::kOpen;
+				if ((s_log++ & 0x1Fu) == 0)
+					SKSE::log::info("[SLF] world-switch gate OPEN (load UI), shadow writes frozen");
+			}
 			return true;
+		}
+		if (s_gate == Gate::kOpen) {
+			// Load UI just closed: world placed but still streaming in.
+			// Do NOT resume this frame - hold a cooldown tail instead.
+			s_gate = Gate::kCooldown;
+			s_cooldown = kCooldownTicks;
+			SKSE::log::info("[SLF] world-switch gate: load UI closed, shadow writes frozen {} ticks", kCooldownTicks);
+			return true;
+		}
 		// Camera jump check (8 scheduler ticks ~ a few frames, cheap).
 		static RE::NiPoint3 s_lastCam{ 0.f, 0.f, 0.f };
 		static std::uint32_t s_tick = 0;
@@ -1899,9 +1929,20 @@ namespace ShadowLimitFixNS::P1
 				s_lastCam = p;
 			}
 			if (jumped) {
-				static std::uint32_t s_gateLog = 0;
-				if ((s_gateLog++ & 0x3Fu) == 0)
-					SKSE::log::info("[SLF] world-switch gate: camera jump, SLF shadow writes paused this frame");
+				s_gate = Gate::kCooldown;
+				s_cooldown = kCooldownTicks;
+				SKSE::log::info("[SLF] world-switch gate: camera jump, shadow writes frozen {} ticks", kCooldownTicks);
+				return true;
+			}
+		}
+		if (s_gate == Gate::kCooldown) {
+			if (s_cooldown > 0) {
+				if (--s_cooldown == 0) {
+					s_gate = Gate::kNone;
+					SKSE::log::info("[SLF] world-switch gate: cooldown over, shadow writes resumed");
+				} else if ((s_log++ & 0x3Fu) == 0) {
+					SKSE::log::info("[SLF] world-switch gate: cooldown {} ticks left, writes frozen", s_cooldown);
+				}
 				return true;
 			}
 		}
