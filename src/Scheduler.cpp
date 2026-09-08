@@ -1872,8 +1872,56 @@ namespace ShadowLimitFixNS::P1
 	}
 
 
+	// fix41 (2026-09-08): true while the world is loading/switching (fast
+	// travel, cell transition load, main menu). During this window the engine
+	// rebuilds shadow state and SLF must not write engine shadow data.
+	// LoadingMenu covers fast travel / loads; a huge per-frame camera jump
+	// (checked at low rate) catches quick-travel teleports without the menu.
+	static bool WorldSwitching()
+	{
+		auto* ui = RE::UI::GetSingleton();
+		if (ui && (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
+					  ui->IsMenuOpen(RE::MainMenu::MENU_NAME)))
+			return true;
+		// Camera jump check (8 scheduler ticks ~ a few frames, cheap).
+		static RE::NiPoint3 s_lastCam{ 0.f, 0.f, 0.f };
+		static std::uint32_t s_tick = 0;
+		if ((s_tick++ & 0x7u) == 0) {
+			bool jumped = false;
+			if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+				const auto p = pc->GetPosition();
+				const float dx = p.x - s_lastCam.x;
+				const float dy = p.y - s_lastCam.y;
+				const float dz = p.z - s_lastCam.z;
+				const float d2 = dx * dx + dy * dy + dz * dz;
+				if (d2 > 2500.f * 2500.f)  // >2500 units between ticks
+					jumped = true;
+				s_lastCam = p;
+			}
+			if (jumped) {
+				static std::uint32_t s_gateLog = 0;
+				if ((s_gateLog++ & 0x3Fu) == 0)
+					SKSE::log::info("[SLF] world-switch gate: camera jump, SLF shadow writes paused this frame");
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void Hook_CalculateActiveShadowCasters::thunk()
 	{
+		// fix41 (2026-09-08): fast-travel / world-switch crash guard. During
+		// a load or a huge per-frame camera jump the engine is rebuilding
+		// shadow state; our post-func writes (dimmer/fade traversal, pinned
+		// accumulator rebuild, extended schedules) then race the rebuild and
+		// the engine's next-frame dispatch can hit empty vtable slots
+		// (crash 2026-09-08-22-01-10 SkyrimSE+14CD743 call [rax+0x30]).
+		// While switching we run the engine scheduler untouched and skip ALL
+		// SLF engine-state writes; the normal path resumes next frame.
+		if (WorldSwitching()) {
+			func();
+			return;
+		}
 		// fix23 perf probe (2026-09-06): split per-frame CPU between the
 		// engine's own shadow scheduling (func) and our SLF post work
 		// (register/extend/publish/fill). PPT diagnosis: smooth room A ran

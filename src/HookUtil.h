@@ -558,7 +558,15 @@ namespace ShadowLimitFixNS::P1
 // in shadowLightsAccum (frame-to-frame inheritance: as long as a pinned
 // light is still engine-ready this frame it stays - walking inside a room
 // never swaps the 4 -> no flicker; only a real scene change swaps them).
-#define SLF_PIN_FIXED_LIGHTS 4
+// fix41 (2026-09-08): DISABLED - proven ineffective in-game (candidates
+// sparse: engine only ever had 1 shadow light in the test room, so nothing
+// to pin; "忽亮忽灭" continued) AND the per-frame clear+push of the
+// engine's shadowLightsAccum is a crash contributor: next frame the engine
+// scheduler (func) runs on OUR rebuilt list whose entries lack engine
+// internal state -> dispatch hits empty vtable slots
+// (crash 2026-09-08-22-01-10: SkyrimSE+14CD743 call [rax+0x30] during a
+// fast-travel load, the same dispatch region as the SLF-era 14CC19E crash).
+#define SLF_PIN_FIXED_LIGHTS 0
 
 // fix34 (2026-09-07): "lamp lights up only when you walk close" root cause
 // = the engine's per-frame LIGHT LOD FADE: lamps farther than the interior
