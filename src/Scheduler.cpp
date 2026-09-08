@@ -1886,10 +1886,16 @@ namespace ShadowLimitFixNS::P1
 	// AdvancedSkinFix disabled). Keep ALL SLF writes frozen for ~120
 	// scheduler invocations (~2 s) after the load UI closes or a camera
 	// jump, then resume.
+	// fix44 (2026-09-08): cooldown 120 -> 360 ticks. A heavy save's cell
+	// streaming continues well past LoadingMenu close; the 2 s freeze ended
+	// while cells/NPCs were still spawning and SLF's first resumed writes
+	// (RegisterEngineAccumLights / publish) hit half-built shadow state ->
+	// clean exit, no WER/CrashLogger dump (23:28 session: gate resumed
+	// 23:28:53.387, died 18 ms later). 360 ticks ~6-9 s covers the stream-in.
 	static bool WorldSwitching()
 	{
 		enum class Gate : std::uint8_t { kNone, kOpen, kCooldown };
-		static constexpr std::uint32_t kCooldownTicks = 120;
+		static constexpr std::uint32_t kCooldownTicks = 360;
 		static Gate s_gate = Gate::kNone;
 		static std::uint32_t s_cooldown = 0;
 		static std::uint32_t s_log = 0;
