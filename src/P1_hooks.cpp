@@ -2037,6 +2037,38 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
+			// fix47 (2026-09-09): post-resume freeze. The first dispatch
+			// after a world-switch gate (01:20:40 session) rendered lights
+			// whose engine Accumulate produced NO casters that frame
+			// (sceneAccumArray empty -> shadow camera not yet placed ->
+			// every caster culled). Engine Render then NEVER returned
+			// (fix45 post-render #0 missing) while shadow-array Draws raced
+			// ~800k/s on slice 0 for 19 s with OMSet frozen at 2772 (never
+			// switching targets) -> hard freeze, clean exit, no WER.
+			// A light with an empty accum list rasterizes zero pixels
+			// anyway (see Scheduler.cpp: "every caster is culled during
+			// Accumulate (sceneAccum=0) and every Render rasterizes zero
+			// pixels"), so skip it until the engine settles - the accum
+			// list fills on a later frame once the camera/frustum is live.
+			// Healthier lights (sceneAccum > 0) are unaffected. Log the
+			// skips so a stall (every light skipped on every frame) is
+			// visible in the log instead of a silent freeze.
+			{
+				auto& rtd47 = s.light->GetRuntimeData();
+				const std::uint32_t acc47 = static_cast<std::uint32_t>(rtd47.sceneAccumArray.size());
+				if (acc47 == 0) {
+					static std::uint32_t s_skip47 = 0;
+					if (diagLights || (s_skip47++ & 0x3Fu) == 0) {
+						SKSE::log::info("[SLF] fix47 skip light#{} slot={} sceneAccum=0 geom={} nd={} idx0={} (accum empty - camera not settled)",
+							i, s.slot,
+							static_cast<std::uint32_t>(s.light->geomList.size()),
+							static_cast<std::uint32_t>(rtd47.shadowmapDescriptors.size()),
+							rtd47.shadowmapDescriptors.empty() ? -1 :
+								static_cast<int32_t>(rtd47.shadowmapDescriptors[0].shadowmapIndex));
+					}
+					continue;
+				}
+			}
 			// v10-phase2-fix (SC-A 21:33): engine Render selects the depth
 			// slice from the light's descriptor shadowmapIndex, but for
 			// slot>=8 lights that field read 0 at render time (engine
