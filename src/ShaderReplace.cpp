@@ -5,8 +5,12 @@
 //     per-material diagnostics, lamp-dimmer restore)
 //   - SLF-B data-channel resource set (per-light payload cbuffers, cb2
 //     readbacks for the 4-shadow-light cap evidence)
-// Standalone plugin: engine-behavior references are REL-ID facts used for
-// verification only; no runtime dependency on any other mod.
+//
+// ATTRIBUTION (original names preserved, see THIRD_PARTY.md): shader
+// cbuffer layouts cross-referenced from this author's DynamicWetness
+// (GPL-3.0) and engine-behavior facts verified against Community Shaders /
+// Open Shaders (alandtse/open-shaders). Standalone: REL-ID facts only, no
+// runtime dependency on any other mod.
 #include <RE/Skyrim.h>
 #include <RE/B/BSShaderRenderTargets.h>  // RE::BSGraphics::RENDER_TARGET / _DEPTHSTENCIL
 #include <SKSE/SKSE.h>

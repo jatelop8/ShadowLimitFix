@@ -1,9 +1,14 @@
 // HookUtil.h - standalone hook helpers for ShadowLimitFix
-// detour_thunk pattern (cross-verified against another GPL-3.0 Skyrim
-// rendering project; based on Microsoft Detours - vcpkg detours.lib).
-// This plugin is standalone: engine-behavior references in comments are
-// REL-ID/address facts used for verification only, with no runtime
-// dependency on any other mod.
+//
+// ATTRIBUTION (original names preserved, see THIRD_PARTY.md):
+//   - detour_thunk trampoline pattern: based on Microsoft Detours (MIT),
+//     reference form as used by Community Shaders / Open Shaders
+//     (github.com/alandtse/open-shaders, GPL-3.0 WITH Modding Exception).
+//   - install_context_hook machinery: CommonLibSSE-NG Community-Shaders fork
+//     (CharmedBaryon/CommonLibSSE-NG; alandtse fork), GPL-3.0-or-later WITH
+//     Modding Exception.
+// This plugin is standalone: REL-ID/engine-behavior comments are facts used
+// for verification only, with no runtime dependency on any other mod.
 // install_context_hook comes from the CommonLibSSE-NG CS fork
 // (SKSE/ContextHook.h, requires SKSE_SUPPORT_XBYAK + vcpkg xbyak).
 #pragma once

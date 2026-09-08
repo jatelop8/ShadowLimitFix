@@ -1,5 +1,11 @@
 // Scheduler.cpp - P1c-1b: real shadow-caster scheduler (select N, slot them)
 //
+// ATTRIBUTION (original names preserved, see THIRD_PARTY.md): engine-state
+// API shapes and scheduler concepts cross-verified against Community Shaders
+// / Open Shaders (alandtse/open-shaders) ShadowEngineHooks.cpp and
+// ShadowCasterClassifier.cpp (GPL-3.0 WITH Modding Exception). Re-implemented
+// here; REL-ID facts only, no runtime dependency.
+//
 // Replaces CalculateActiveShadowCasters (ID 100419/107137). The engine calls// ResetCalculatedShadowCasterLights BEFORE this hook (vanilla flow), which
 // clears slot state and installs the sun - so we only need to:
 //   1. collect active shadow lights

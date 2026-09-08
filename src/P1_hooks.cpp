@@ -1,7 +1,11 @@
 // P1_hooks.cpp - P1: engine hook installation framework
 // NOT yet in CMakeLists.txt - enabled only after P0 passes in-game.
-// All install patterns cross-verified against upstream GPL-3.0 references
-// (REL-ID facts; no runtime dependency on any other mod):
+//
+// ATTRIBUTION (original names preserved, see THIRD_PARTY.md):
+//   Hook targets and install patterns cross-verified against Community
+//   Shaders / Open Shaders (github.com/alandtse/open-shaders, GPL-3.0 WITH
+//   Modding Exception) - ShadowEngineHooks.cpp / LightLimitFix reference.
+//   REL-ID facts; no runtime dependency on any other mod.
 //   src/Features/LightLimitFix/ShadowEngineHooks.cpp
 //
 // Phases:
