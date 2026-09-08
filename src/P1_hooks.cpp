@@ -1924,6 +1924,31 @@ namespace ShadowLimitFixNS::P1
 	static void RenderScheduledShadowLightsDispatch()
 	{
 		const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
+		// fix45 (2026-09-08): resume grace. After a world-switch gate
+		// cooldown ends, the scheduler re-learns the engine accumulator
+		// immediately but the per-light Render state was just rebuilt by
+		// the load; the FIRST post-resume dispatch froze inside one shadow
+		// pass (23:46 session, OMSet stopped at 3490 while draws raced
+		// ~60k/s for 20+s). Park the dispatch while the grace counter is
+		// armed (scheduler still fills the list each frame), then for the
+		// first 16 live frames log every per-light Render so a repeat
+		// freeze pinpoints the exact light.
+		static std::uint32_t s_afterGrace = 0;
+		{
+			const std::uint32_t g = ShadowLimitFixNS::P1::g_resumeGrace.load(std::memory_order_acquire);
+			if (g > 0) {
+				if (g == 96)
+					SKSE::log::info("[SLF] fix45 resume grace: manual dispatch parked {} ticks (load-settled render state)", g);
+				ShadowLimitFixNS::P1::g_resumeGrace.store(g - 1, std::memory_order_release);
+				s_afterGrace = 16;  // diagnostic window once we come back live
+				return;
+			}
+		}
+		const bool diagLights = s_afterGrace > 0;
+		if (diagLights && (--s_afterGrace == 15))
+			SKSE::log::info("[SLF] fix45 grace over - dispatch live, per-light diagnostic for {} frames", 16u);
+		if (diagLights)
+			SKSE::log::info("[SLF] fix45 diag: dispatch n={}", n);
 
 		static std::uint32_t s_dispatchFrame = 0;
 		const bool logNow = (++s_dispatchFrame & 0x3Fu) == 0;
@@ -2019,7 +2044,19 @@ namespace ShadowLimitFixNS::P1
 				s_renderingSlot.store(s.slot, std::memory_order_relaxed);
 			}
 			std::uint32_t idx = 0;  // verified-recipe arg (see comment above)
+			if (diagLights) {
+				auto& drtd = s.light->GetRuntimeData();
+				SKSE::log::info("[SLF] fix45 pre-render #{} slot={} dyn={} acc={} geom={} nd={} idx0={}",
+					i, s.slot, s.light->dynamic ? 1 : 0,
+					static_cast<std::uint32_t>(drtd.sceneAccumArray.size()),
+					static_cast<std::uint32_t>(s.light->geomList.size()),
+					static_cast<std::uint32_t>(drtd.shadowmapDescriptors.size()),
+					drtd.shadowmapDescriptors.empty() ? -1 :
+						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex));
+			}
 			s.light->Render(idx);   // engine virtual: draws this light's shadows
+			if (diagLights)
+				SKSE::log::info("[SLF] fix45 post-render #{} slot={} ok", i, s.slot);
 			// fix19b: snapshot the descriptor slice Render left behind. The
 			// re-pin loop below overwrites it, so THIS is the only moment the
 			// engine's own write is observable. postIdx != s.slot means Render

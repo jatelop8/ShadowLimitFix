@@ -1946,6 +1946,16 @@ namespace ShadowLimitFixNS::P1
 				if (--s_cooldown == 0) {
 					s_gate = Gate::kNone;
 					SKSE::log::info("[SLF] world-switch gate: cooldown over, shadow writes resumed");
+					// fix45 (2026-09-08): the FIRST post-resume dispatch
+					// froze inside a single shadow pass (23:46 session:
+					// cooldown over 23:46:04.405 -> 0.4s later OMSet->shadow
+					// stopped advancing while draw counts raced ~60k/s for
+					// 20+s; main image never produced). The scheduler
+					// re-learns the engine accumulator this frame but the
+					// per-light Render state (accum/geom/camera) was just
+					// rebuilt by the load - park the manual dispatch for
+					// ~96 ticks so the engine's own frames settle it first.
+					ShadowLimitFixNS::P1::g_resumeGrace.store(96, std::memory_order_release);
 				} else if ((s_log++ & 0x3Fu) == 0) {
 					SKSE::log::info("[SLF] world-switch gate: cooldown {} ticks left, writes frozen", s_cooldown);
 				}

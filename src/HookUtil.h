@@ -149,6 +149,17 @@ namespace ShadowLimitFixNS::P1
 	inline std::array<ScheduledShadowLight, 128> g_scheduledShadowLights{};
 	inline std::atomic<std::uint32_t> g_scheduledShadowCount{ 0 };
 
+	// fix45 (2026-09-08): post-resume dispatch grace counter (ticks).
+	// The world-switch gate cooldown ending re-enables the scheduler's
+	// register/extend writes AND the manual dispatch in the same frame.
+	// The first post-resume dispatch froze inside a single shadow pass
+	// (23:46 session: last OMSet->shadow 23:45:49.441, then OMSet stopped
+	// advancing while shadow draws raced ~60k/s for 20+s - a Render on a
+	// half-settled light, main image never produced = "freeze"). The
+	// dispatch hook parks itself while this is >0 (scheduler still learns
+	// the engine accumulator each frame); Scheduler.cpp arms it at resume.
+	inline std::atomic<std::uint32_t> g_resumeGrace{ 0 };
+
 	// ---- Post-light pass CPU data (SLF_POSTLIGHT_ENABLED) ----
 	// Filled by the scheduler right after PublishShadowLightDataChannel:
 	// one entry per EXTENDED light (scheduled index >= this frame's engine
