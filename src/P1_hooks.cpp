@@ -2105,16 +2105,43 @@ namespace ShadowLimitFixNS::P1
 				s_renderingLight.store(s.light, std::memory_order_relaxed);
 				s_renderingSlot.store(s.slot, std::memory_order_relaxed);
 			}
+			// fix49 (2026-09-09): scrub drawFocusShadows before EVERY
+			// manual Render, aligned with CS ScrubFocusShadowFlags
+			// (ShadowScheduler.cpp: "a stale flag ... sends
+			// BSShadowParabolicLight::Render into its focus loop on a
+			// non-directional light and CTDs"; CS scrubs every active
+			// light + the sun whenever its shadow budget exceeds 4).
+			// SLF's 127-slice expansion is exactly that regime, and the
+			// 01:46:21 session froze on the FIRST sun Render after a
+			// weather/time-driven world-switch gate - if the engine left
+			// the sun's focus flag set (it re-arms flags while the SLF
+			// gate parks the scheduler), the sun's directional cascade
+			// Render walks the focus path with no focus state mounted ->
+			// infinite loop, clean exit, no WER (same signature as the
+			// 01:20:40 point-light freeze fix47 addressed). CS also
+			// applies lens flare after sun Accumulate; we skip that for
+			// now (render-only cosmetic, not a loop source).
+			{
+				auto& frtd = s.light->GetRuntimeData();
+				if (frtd.drawFocusShadows) {
+					static std::uint32_t s_focusScrub = 0;
+					if (diagLights || (s_focusScrub++ & 0x3Fu) == 0)
+						SKSE::log::info("[SLF] fix49 scrub drawFocusShadows light#{} slot={} (was set)",
+							i, s.slot);
+					frtd.drawFocusShadows = false;
+				}
+			}
 			std::uint32_t idx = 0;  // verified-recipe arg (see comment above)
 			if (diagLights) {
 				auto& drtd = s.light->GetRuntimeData();
-				SKSE::log::info("[SLF] fix45 pre-render #{} slot={} dyn={} acc={} geom={} nd={} idx0={}",
+				SKSE::log::info("[SLF] fix45 pre-render #{} slot={} dyn={} acc={} geom={} nd={} idx0={} focus={}",
 					i, s.slot, s.light->dynamic ? 1 : 0,
 					static_cast<std::uint32_t>(drtd.sceneAccumArray.size()),
 					static_cast<std::uint32_t>(s.light->geomList.size()),
 					static_cast<std::uint32_t>(drtd.shadowmapDescriptors.size()),
 					drtd.shadowmapDescriptors.empty() ? -1 :
-						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex));
+						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex),
+					drtd.drawFocusShadows ? 1 : 0);
 			}
 			s.light->Render(idx);   // engine virtual: draws this light's shadows
 			if (diagLights)
