@@ -1900,12 +1900,25 @@ namespace ShadowLimitFixNS::P1
 		static std::uint32_t s_cooldown = 0;
 		static std::uint32_t s_log = 0;
 
+		// fix46 (2026-09-08): the moment the gate freezes, the scheduled
+		// dispatch list may still hold THIS frame's lights (filled before
+		// the transition was detected). The cell unload then releases those
+		// engine objects while the manual dispatch (which does NOT consult
+		// WorldSwitching) renders the stale list -> UAF with a clean exit
+		// (00:04:14 session). Zero the list and flag the dispatch hook so
+		// nothing renders a freed light during the freeze.
+		const auto freeze = [] {
+			ShadowLimitFixNS::P1::g_scheduledShadowCount.store(0, std::memory_order_release);
+			ShadowLimitFixNS::P1::g_shadowWritesFrozen.store(true, std::memory_order_release);
+		};
+
 		auto* ui = RE::UI::GetSingleton();
 		if (ui && (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
 					  ui->IsMenuOpen(RE::MainMenu::MENU_NAME))) {
 			// Load UI open: keep frozen (menu may reopen mid-transition).
 			if (s_gate != Gate::kOpen) {
 				s_gate = Gate::kOpen;
+				freeze();
 				if ((s_log++ & 0x1Fu) == 0)
 					SKSE::log::info("[SLF] world-switch gate OPEN (load UI), shadow writes frozen");
 			}
@@ -1916,6 +1929,7 @@ namespace ShadowLimitFixNS::P1
 			// Do NOT resume this frame - hold a cooldown tail instead.
 			s_gate = Gate::kCooldown;
 			s_cooldown = kCooldownTicks;
+			freeze();
 			SKSE::log::info("[SLF] world-switch gate: load UI closed, shadow writes frozen {} ticks", kCooldownTicks);
 			return true;
 		}
@@ -1937,6 +1951,7 @@ namespace ShadowLimitFixNS::P1
 			if (jumped) {
 				s_gate = Gate::kCooldown;
 				s_cooldown = kCooldownTicks;
+				freeze();
 				SKSE::log::info("[SLF] world-switch gate: camera jump, shadow writes frozen {} ticks", kCooldownTicks);
 				return true;
 			}
@@ -1955,6 +1970,9 @@ namespace ShadowLimitFixNS::P1
 					// per-light Render state (accum/geom/camera) was just
 					// rebuilt by the load - park the manual dispatch for
 					// ~96 ticks so the engine's own frames settle it first.
+					// fix46: hand the freeze flag to the resume grace (it
+					// keeps the dispatch parked while the scheduler learns).
+					ShadowLimitFixNS::P1::g_shadowWritesFrozen.store(false, std::memory_order_release);
 					ShadowLimitFixNS::P1::g_resumeGrace.store(96, std::memory_order_release);
 				} else if ((s_log++ & 0x3Fu) == 0) {
 					SKSE::log::info("[SLF] world-switch gate: cooldown {} ticks left, writes frozen", s_cooldown);

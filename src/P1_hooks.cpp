@@ -1923,6 +1923,24 @@ namespace ShadowLimitFixNS::P1
 
 	static void RenderScheduledShadowLightsDispatch()
 	{
+		// fix46 (2026-09-08): the world-switch gate zeroes the scheduled
+		// list the moment it freezes (see Scheduler.cpp freeze()) and this
+		// hook must NOT render anything while the gate is frozen either -
+		// on a no-load-menu cell transition (outdoor boundary walk /
+		// teleport / camera jump) this hook keeps firing every frame while
+		// the scheduler fill side is gated, and a list that was NOT yet
+		// zeroed (or a stale local n from before the freeze) could render a
+		// light the cell unload just released -> clean exit with no dump
+		// (00:04:14 session, died ~1s after the camera-jump gate fired).
+		// The flag is also kept true across the fix45 resume grace (the
+		// scheduler learns the fresh accumulator while we stay parked).
+		if (ShadowLimitFixNS::P1::g_shadowWritesFrozen.load(std::memory_order_acquire)) {
+			static std::uint32_t s_frozenLog = 0;
+			if ((s_frozenLog++ & 0xFFu) == 0)
+				SKSE::log::info("[SLF] fix46 dispatch parked (world-switch gate frozen)");
+			return;
+		}
+
 		const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
 		// fix45 (2026-09-08): resume grace. After a world-switch gate
 		// cooldown ends, the scheduler re-learns the engine accumulator

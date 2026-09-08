@@ -160,6 +160,18 @@ namespace ShadowLimitFixNS::P1
 	// the engine accumulator each frame); Scheduler.cpp arms it at resume.
 	inline std::atomic<std::uint32_t> g_resumeGrace{ 0 };
 
+	// fix46 (2026-09-08): true while the world-switch gate is frozen
+	// (load UI open / cooldown). The scheduler's fill side is gated by
+	// WorldSwitching(), but the manual dispatch (Hook_RenderShadowLights)
+	// is NOT - on a cell transition WITHOUT a load menu (outdoor cell
+	// boundary walk / teleport / camera jump) the scheduled list can still
+	// hold the PREVIOUS frame's 21 lights whose engine objects the cell
+	// unload just released -> dispatch Render on freed light -> clean exit,
+	// no WER/CrashLogger dump (00:04:14 session, camera-jump gate fired
+	// 00:04:14.218, died within ~1s). The dispatch hook parks itself while
+	// this is true; the gate also zeroes the count the moment it freezes.
+	inline std::atomic<bool> g_shadowWritesFrozen{ false };
+
 	// ---- Post-light pass CPU data (SLF_POSTLIGHT_ENABLED) ----
 	// Filled by the scheduler right after PublishShadowLightDataChannel:
 	// one entry per EXTENDED light (scheduled index >= this frame's engine
