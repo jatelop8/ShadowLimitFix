@@ -2162,31 +2162,35 @@ namespace ShadowLimitFixNS::P1
 							static_cast<std::uint32_t>(s.light->geomList.size()));
 					return 4;
 				}
-				// Publish the render context exactly like the point-light
-				// loop does, so SelectDepthBuffer1/2 force the canvas to the
-				// sun's slot instead of trusting the engine's stale global.
-				for (auto& d : rtd.shadowmapDescriptors)
-					d.shadowmapIndex = idx0;
-				s_renderingLight.store(s.light, std::memory_order_relaxed);
-				s_renderingSlot.store(idx0, std::memory_order_relaxed);
-				// Render arg 0 = the in-game-verified recipe shape (sun and
-				// points alike; the slice comes from descriptor shadowmapIndex).
-				std::uint32_t idx = 0;
-				static std::uint32_t s_sunRenders = 0;
-				const bool dbg = (++s_sunRenders <= 32u);
-				if (dbg)
-					SKSE::log::info("[SLF] fix72 sun: Render begin #{} slot={} idx0={} acc={} geom={} cam=0x{:x}",
-						s_sunRenders, s.slot, idx0,
-						static_cast<std::uint32_t>(rtd.sceneAccumArray.size()),
+				// fix83 (2026-09-10): sun->Render is PARKED. Empirical
+				// matrix (fix79-fix82, 4 test sessions): EngineFixes
+				// force-alpha-test hook ON -> sun->Render AVs instantly
+				// (EngineFixes.dll+002CFB1 = BSBatchRenderer_SetupAndDraw
+				// Pass:19 mov rbx,[rax] reads BSRenderPass->shader=null -
+				// the SAME crash as the 00:52/15:27 outdoor AVs); hook
+				// OFF -> sun->Render CPU-spins the engine (01:32:43
+				// freeze, "Render begin #1" is the last log line, no
+				// crash dump). Both outcomes prove the directional
+				// cascade Render cannot be re-entered from this render
+				// tip: the rax=0 engine-tip stop leaves the engine's
+				// shadow-render state machine dead (cascade cameras /
+				// pass state half-built), so sun->Render has no valid
+				// context - unlike point lights whose full context SLF
+				// owns (descriptor pin + s_renderingLight/SelectDSB
+				// force). Point-light shadows keep rendering; the sun
+				// needs the render-TIP REPLACEMENT architecture (engine
+				// tip alive for the directional pass, CS-style), which
+				// is a scheduler/tip redesign - not a one-line gate.
+				// Park here (code=5) so the session never freezes.
+				// fix81's armed caster collection still runs (geom=N
+				// below proves casters ARE ready - the data waits for
+				// the tip redesign).
+				static std::uint32_t s_sunParkLog = 0;
+				if ((s_sunParkLog++ & 0x3Fu) == 0)
+					SKSE::log::info("[SLF] fix83 sun: Render PARKED (tip re-entry impossible, fix83 comment) geom={} cam=0x{:x}",
 						static_cast<std::uint32_t>(s.light->geomList.size()),
 						reinterpret_cast<uintptr_t>(rtd.shadowmapDescriptors[0].camera.get()));
-				s.light->Render(idx);
-				if (dbg)
-					SKSE::log::info("[SLF] fix72 sun: Render end ok idx0={}",
-						static_cast<std::uint32_t>(rtd.shadowmapDescriptors[0].shadowmapIndex));
-				s_renderingLight.store(nullptr, std::memory_order_relaxed);
-				s_renderingSlot.store(0xFFFFFFFFu, std::memory_order_relaxed);
-				return 0;
+				return 5;
 			}
 			return 1;
 		} __except ((avAddr = reinterpret_cast<std::uintptr_t>(
