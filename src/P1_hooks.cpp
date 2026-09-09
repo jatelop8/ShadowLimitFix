@@ -2087,6 +2087,33 @@ namespace ShadowLimitFixNS::P1
 					drtd.shadowmapDescriptors.empty() ? -1 :
 						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex));
 			}
+			// fix64 step3c (2026-09-09): camDflt render-safety fence (the
+			// fix51 gate, re-applied - the fix46 rollback dropped it and the
+			// 16:50 session froze with slice-0 draws racing 162M: a light
+			// whose shadow camera is still the engine's default unit box
+			// (unplaced - post-load/cell-switch) makes engine Render spin on
+			// the zero-size frustum). Skip until the engine UpdateCamera
+			// places it. This is independent of the sun saga - pure render
+			// safety for point lights.
+			{
+				auto& rtg = s.light->GetRuntimeData();
+				const bool noDesc = rtg.shadowmapDescriptors.empty() ||
+					!rtg.shadowmapDescriptors[0].camera;
+				bool camDflt = true;
+				if (!noDesc) {
+					const auto& fr = rtg.shadowmapDescriptors[0].camera->GetRuntimeData2().viewFrustum;
+					camDflt = fr.fLeft == -1.0f && fr.fRight == 1.0f &&
+						fr.fTop == 1.0f && fr.fBottom == -1.0f &&
+						fr.fNear == 0.1f && fr.fFar == 1.0f;
+				}
+				if (noDesc || camDflt) {
+					static std::uint32_t s_camSkip = 0;
+					if ((s_camSkip++ & 0x3Fu) == 0)
+						SKSE::log::info("[SLF] camDflt skip light#{} slot={} (shadow camera not placed)",
+							i, s.slot);
+					continue;
+				}
+			}
 			s.light->Render(idx);   // engine virtual: draws this light's shadows
 			if (diagLights)
 				SKSE::log::info("[SLF] fix45 post-render #{} slot={} ok", i, s.slot);
