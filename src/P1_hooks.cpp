@@ -2087,29 +2087,20 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
-			// fix61 (2026-09-09, USER DECISION): the sun does NOT render
-			// through this dispatch. This is the final resolution of the
-			// fix48-fix60 sun saga: the 13:09 WER dump (CrashDumps/
-			// SkyrimSE.exe.38632.dmp) proved Render(sun) here is a
-			// STRUCTURAL engine AV - faulting RIP executed at 0x11B8AD7400,
-			// OUTSIDE every loaded module (call through a corrupted
-			// pointer) reading addr 0x8 - and the 13:59 session showed it
-			// AVs EVERY frame from the session's first Render(sun), gate or
-			// no gate, geom 0 or 2016, armed or bare accumulate, warmup or
-			// not (fix54/55/56/58/59 all tried). The engine's directional
-			// cascade render is incompatible with SLF's shadow-array
-			// expansion when called from the manual dispatch; fix60's SEH
-			// net caught the AV every frame but the repeated corruption
-			// still froze the process. SLF's purpose is INDOOR extended
-			// point lights (user-confirmed working); the sun stays in the
-			// engine's own domain. fix58's published-only sun (func()
-			// accumulates it, we never touch it) is kept so the engine
-			// sun state stays pristine; this dispatch simply never draws
-			// it. Known limitation: no outdoor sun SHADOW (sun light and
-			// sky are unaffected - they do not depend on the shadow
-			// render). Backlog: engine-owned sun draw channel.
-			if (s.light->GetIsDirectionalLight())
-				continue;
+			// fix62 (2026-09-09): the sun IS rendered again, because the
+			// 14:06 user report ("连阳光都没有") proved the sun Render
+			// call also drives the ENGINE's sun-light state: fix61 skipped
+			// the sun entirely and the sun LIGHT vanished with it (fix60,
+			// which called Render(sun) even under the every-frame AV, still
+			// had sunlight). fix62 pairs this with the gate outage cut to
+			// ~2 ticks (Scheduler.cpp) to restore the fix46-less continuous
+			// render cadence under which 9-06 rendered the sun fine: no
+			// multi-second shadow-render outage = no engine shadow-pass
+			// state damage = Render(sun) has a live state to work in.
+			// fix60's SafeLightRender SEH net stays: if Render(sun) still
+			// AVs it is caught and logged instead of taking the process
+			// down, and even the faulting call's partial execution keeps
+			// the engine sun-light state refreshed (fix60 evidence).
 			// fix47 (2026-09-09): post-resume freeze. The first dispatch
 			// after a world-switch gate (01:20:40 session) rendered lights
 			// whose engine Accumulate produced NO casters that frame

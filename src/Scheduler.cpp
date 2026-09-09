@@ -1933,8 +1933,8 @@ namespace ShadowLimitFixNS::P1
 		// gets exercised once. 120 ticks (~2-3 s) + the 48-tick grace puts the
 		// dispatch live ~3-4 s after any outdoor teleport - inside the
 		// player's patience, still past the unload instant.
-		static constexpr std::uint32_t kLoadCooldownTicks = 360;  // load-UI close
-		static constexpr std::uint32_t kJumpCooldownTicks = 120;  // camera jump
+		static constexpr std::uint32_t kLoadCooldownTicks = 2;  // load-UI close
+		static constexpr std::uint32_t kJumpCooldownTicks = 2;  // camera jump
 		static Gate s_gate = Gate::kNone;
 		static std::uint32_t s_cooldown = 0;
 		static std::uint32_t s_log = 0;
