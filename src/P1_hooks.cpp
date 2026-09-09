@@ -2064,6 +2064,24 @@ namespace ShadowLimitFixNS::P1
 	// Returns: 0 = rendered OK, 1 = no directional in scheduled set,
 	//          2 = camera not placed (engine not maintaining the sun yet),
 	//          3 = AV caught.
+	//
+	// fix71 (2026-09-09, 22:5x): fix70's first REAL sun render froze the
+	// whole game outdoors right after a world-switch resume (22:53:33
+	// session - log ends at "fix45 diag: dispatch n=1", no fix45
+	// pre-render row => the single scheduled light was the sun and the
+	// hang is inside sun->Render). Diagnosis: the point-light loop always
+	// pins every descriptor + publishes s_renderingLight/s_renderingSlot
+	// so the SelectDepthBuffer hooks route the shadow draws to a valid
+	// extended DSV slot; fix70's sun render did NEITHER, so SelectDSB ran
+	// act=0 with the engine's stale sub-index global (post-world-switch
+	// garbage / out-of-range slot) and OMSet bound an invalid/null DSV ->
+	// GPU-side deadlock, frozen frame, no exception (SEH can't catch it).
+	// Fix: render the sun through the SAME verified context as a point
+	// light - pin descs to the engine-assigned sun slot (idx0, must be in
+	// range), publish s_renderingLight/s_renderingSlot so SelectDSB forces
+	// the canvas, clear afterwards, and log begin/end around Render so a
+	// repeat hang pinpoints the exact statement (first 32 real renders
+	// log every frame).
 	static __declspec(noinline) std::uint32_t RenderSunCascadeSeh()
 	{
 		__try {
@@ -2086,14 +2104,46 @@ namespace ShadowLimitFixNS::P1
 					fr.fNear == 0.1f && fr.fFar == 1.0f;
 				if (dflt)
 					return 2;
+				// fix71: the sun's descriptor carries the engine-assigned
+				// shadow canvas (idx0). Garbage/out-of-range after a
+				// world-switch = do not render (SelectDSB would route to an
+				// invalid DSV). The extended arrays hold 128 entries but only
+				// `count` were created; anything >= count is a null/partial
+				// DSV - cap to the safe engine band (0-7 vanilla mirrors are
+				// always created) unless a valid descriptor index exists.
+				const std::uint32_t idx0 = static_cast<std::uint32_t>(rtd.shadowmapDescriptors[0].shadowmapIndex);
+				if (idx0 >= ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire) &&
+					idx0 >= 8u)
+					return 2;
+				// Publish the render context exactly like the point-light
+				// loop does, so SelectDepthBuffer1/2 force the canvas to the
+				// sun's slot instead of trusting the engine's stale global.
+				for (auto& d : rtd.shadowmapDescriptors)
+					d.shadowmapIndex = idx0;
+				s_renderingLight.store(s.light, std::memory_order_relaxed);
+				s_renderingSlot.store(idx0, std::memory_order_relaxed);
 				// Render arg 0 = the in-game-verified recipe shape (sun and
 				// points alike; the slice comes from descriptor shadowmapIndex).
 				std::uint32_t idx = 0;
+				static std::uint32_t s_sunRenders = 0;
+				const bool dbg = (++s_sunRenders <= 32u);
+				if (dbg)
+					SKSE::log::info("[SLF] fix71 sun: Render begin #{} slot={} idx0={} cam=0x{:x}",
+						s_sunRenders, s.slot, idx0,
+						reinterpret_cast<uintptr_t>(rtd.shadowmapDescriptors[0].camera.get()));
 				s.light->Render(idx);
+				if (dbg)
+					SKSE::log::info("[SLF] fix71 sun: Render end ok idx0={}",
+						static_cast<std::uint32_t>(rtd.shadowmapDescriptors[0].shadowmapIndex));
+				s_renderingLight.store(nullptr, std::memory_order_relaxed);
+				s_renderingSlot.store(0xFFFFFFFFu, std::memory_order_relaxed);
 				return 0;
 			}
 			return 1;
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			// fix71: never leave the SelectDSB context published after an AV.
+			s_renderingLight.store(nullptr, std::memory_order_relaxed);
+			s_renderingSlot.store(0xFFFFFFFFu, std::memory_order_relaxed);
 			return 3;
 		}
 	}
