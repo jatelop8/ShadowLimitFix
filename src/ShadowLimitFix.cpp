@@ -116,7 +116,38 @@ namespace ShadowLimitFixNS
 			// that list (SLF_MANUAL_RENDER=1) - engine schedules, WE render,
 			// so the engine's fixed 8-slot dispatch never touches the
 			// 127-slice array (v8-exp2 crash site avoided).
-			P1::InstallScheduler();
+			//
+			// fix74 (2026-09-09 23:5x): DISABLED - bisect verdict step 2.
+			// crash-2026-09-09-23-50-02 (indoor, Sleeping Giant Inn,
+			// fix73 md5 0dfe1463, uptime 113s): AV executing HEAP
+			// (RIP=0x1136471C00 = R14 CandleHornWall01 mesh +0x600) inside
+			// the SAME engine lighting-pass machinery as the outdoor crash
+			// (BSBatchRenderer_SetupAndDrawPass region uid 107639-107644),
+			// NO SLF frames on the stack. fix73 = engine-native 8-slice
+			// kSHADOWMAPS with NO render-loop rax=0 hook installed
+			// (Hook_RenderShadowLights is only installed inside
+			// InstallExtendedBuffers step 4 - fix73 skipped that whole
+			// function), so the ENGINE's vanilla dispatch ran unmodified
+			// against an accumulator the scheduler had flooded: the
+			// ShadowSceneNode dump shows Active Shadow Lights=21 (SLF
+			// scheduler publish, lightCount=21 BT rows from 23:49:56) and
+			// the engine's <=8-slot shadow state machine walked all 21 ->
+			// OOB descriptor state -> corrupted pointer in the lighting
+			// pass. fix69 (30-slice array + rax=0 stop + scheduler) never
+			// crashed indoors because rax=0 kept the engine dispatch off
+			// the flooded accumulator. fix73 left HALF the v10
+			// architecture (scheduler on, dispatch-stop off) and that
+			// half-combination is the indoor killer.
+			//
+			// fix74 = InstallScheduler off => engine scheduling +
+			// dispatch + rendering 100% vanilla (v7-vanilla proven state,
+			// HookUtil.h:331: "outdoor sun shadow RETURNED"). Sun stays
+			// (engine-rendered, fix73 outdoor verdict). Indoor shadow
+			// lights return to the engine's native budget - extended
+			// all-lights shadows then need the FULL CS-style coordinated
+			// engine-state expansion (accumulator + channel map +
+			// per-surface ceilings), not scheduler-plus-native-dispatch.
+			// P1::InstallScheduler();
 			// Material-pass sampling probe (22:3x flicker diagnosis): logs
 			// t103 view range + canvas content + engine shadow globals at
 			// the t14-bind sampling moment. Read-only; strip anytime.
