@@ -2115,6 +2115,49 @@ namespace ShadowLimitFixNS::P1
 				if (idx0 >= ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire) &&
 					idx0 >= 8u)
 					return 2;
+				// fix72 (2026-09-09): CS SetupSunLight recipe - the sun's
+				// caster geometry is ONLY collected inside the engine's
+				// CalculateActiveShadowCasters (func, the single vtable09
+				// call in uid107137) under an internal phase gate; with our
+				// rax=0 render stop the engine never reaches that state and
+				// fix69 measured the sun at geom=0/acc=0. CS accumulates the
+				// sun itself every frame right before rendering it; do the
+				// same here (only when empty - a double same-frame
+				// Accumulate is the fail-fast crash RegisterEngineAccumLights
+				// guards against). Gate on shaderAccumulator readiness like
+				// the v4 crash fix. If the collection STILL comes up empty
+				// the directional Render would rasterize against a
+				// half-built caster set and spin (the fix70/fix71 freezes) -
+				// skip instead of rendering blind.
+				if (rtd.sceneAccumArray.empty()) {
+					bool accReady = !rtd.shadowmapDescriptors.empty();
+					for (auto& d : rtd.shadowmapDescriptors)
+						if (d.shaderAccumulator.get() == nullptr)
+							accReady = false;
+					const std::uint32_t smc = static_cast<std::uint32_t>(s.light->shadowMapCount);
+					if (accReady && smc <= rtd.shadowmapDescriptors.size()) {
+						s.light->Accumulate(*GetAccumLightSlotCount(), 0, nullptr);
+						static std::uint32_t s_sunAccLog = 0;
+						if ((s_sunAccLog++ & 0x3Fu) == 0)
+							SKSE::log::info("[SLF] fix72 sun: Accumulate filled acc={} geom={} idx0={}",
+								static_cast<std::uint32_t>(rtd.sceneAccumArray.size()),
+								static_cast<std::uint32_t>(s.light->geomList.size()), idx0);
+					} else {
+						static std::uint32_t s_sunAccDefer = 0;
+						if ((s_sunAccDefer++ & 0x3Fu) == 0)
+							SKSE::log::info("[SLF] fix72 sun: Accumulate deferred (accReady={} descs={} smc={})",
+								accReady ? 1 : 0,
+								static_cast<std::uint32_t>(rtd.shadowmapDescriptors.size()), smc);
+					}
+				}
+				if (rtd.sceneAccumArray.empty() && s.light->geomList.empty()) {
+					static std::uint32_t s_sunEmptyLog = 0;
+					if ((s_sunEmptyLog++ & 0x3Fu) == 0)
+						SKSE::log::info("[SLF] fix72 sun: no casters after Accumulate (acc={} geom={}) - render skipped",
+							static_cast<std::uint32_t>(rtd.sceneAccumArray.size()),
+							static_cast<std::uint32_t>(s.light->geomList.size()));
+					return 2;
+				}
 				// Publish the render context exactly like the point-light
 				// loop does, so SelectDepthBuffer1/2 force the canvas to the
 				// sun's slot instead of trusting the engine's stale global.
@@ -2128,12 +2171,14 @@ namespace ShadowLimitFixNS::P1
 				static std::uint32_t s_sunRenders = 0;
 				const bool dbg = (++s_sunRenders <= 32u);
 				if (dbg)
-					SKSE::log::info("[SLF] fix71 sun: Render begin #{} slot={} idx0={} cam=0x{:x}",
+					SKSE::log::info("[SLF] fix72 sun: Render begin #{} slot={} idx0={} acc={} geom={} cam=0x{:x}",
 						s_sunRenders, s.slot, idx0,
+						static_cast<std::uint32_t>(rtd.sceneAccumArray.size()),
+						static_cast<std::uint32_t>(s.light->geomList.size()),
 						reinterpret_cast<uintptr_t>(rtd.shadowmapDescriptors[0].camera.get()));
 				s.light->Render(idx);
 				if (dbg)
-					SKSE::log::info("[SLF] fix71 sun: Render end ok idx0={}",
+					SKSE::log::info("[SLF] fix72 sun: Render end ok idx0={}",
 						static_cast<std::uint32_t>(rtd.shadowmapDescriptors[0].shadowmapIndex));
 				s_renderingLight.store(nullptr, std::memory_order_relaxed);
 				s_renderingSlot.store(0xFFFFFFFFu, std::memory_order_relaxed);
