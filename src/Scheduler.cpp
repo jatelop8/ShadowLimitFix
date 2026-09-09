@@ -2146,7 +2146,7 @@ namespace ShadowLimitFixNS::P1
 	// RenderScheduledShadowLights "Sun first"). Re-run the armed caster
 	// walk against the real slot counter immediately before dispatch
 	// renders the sun, CS-style.
-	void SunArmedAccumulateRealSlot()
+	void SunBareAccumulateRealSlot()
 	{
 		auto* ssn = GetShadowSceneNode();
 		if (!ssn)
@@ -2164,14 +2164,20 @@ namespace ShadowLimitFixNS::P1
 		}
 		if (sun->shadowMapCount > descs.size())
 			return;
-		SetCurrentCullLight(sun);
-		struct ClearCull
-		{
-			~ClearCull() { SetCurrentCullLight(nullptr); }
-		} clearGuard;
-		s_healAttached.clear();
-		s_accumRebuildAttach.store(sun->geomList.empty(), std::memory_order_relaxed);
+		// fix55 (2026-09-09): BARE accumulate - no SetCurrentCullLight /
+		// heal-attach / s_accumRebuildAttach. The fix54 armed walk was a
+		// CULL-ONLY mode built for POINT-light caster collection (the
+		// AppendVirtual hooks at Scheduler.cpp:809 attach geometry only
+		// while s_accumRebuildAttach is set) - it never fills the engine
+		// accumulator: 12:04 session logged fix54 post-accum sceneAccum=0
+		// geom=2016 (geom unchanged 2016->2016 by the armed walk, so the
+		// sun's geomList was ALREADY full and the armed re-collection was
+		// pure noise). CS renders the sun from Light[0] after SetupSunLight
+		// performs a BARE accumulate to the real global slot
+		// (open-shaders ShadowScheduler.cpp:1198 sun->Accumulate(
+		// *GetAccumLightSlot(), 0, nullptr)) and BSShadowLight::Render's
+		// geometry loop walks the engine accumulator (sceneAccumArray) that
+		// bare accumulate fills. Mirror that call shape exactly.
 		sun->Accumulate(*GetAccumLightSlot(), 0, nullptr);
-		s_accumRebuildAttach.store(false, std::memory_order_relaxed);
 	}
 }

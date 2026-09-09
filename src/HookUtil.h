@@ -201,7 +201,7 @@ namespace ShadowLimitFixNS::P1
 
 	void RunPostLightPass(::ID3D11DeviceContext* a_ctx);  // ShaderReplace.cpp
 	void ForceLampDimmersOne();  // Scheduler.cpp - restore lodDimmer=1 on all active lamps (fix38/39)
-	void SunArmedAccumulateRealSlot();  // Scheduler.cpp - fix54: re-run armed caster walk on the sun against the engine's REAL accum slot right before dispatch renders it (CS SetupSunLight alignment)
+	void SunBareAccumulateRealSlot();  // Scheduler.cpp - fix55: bare engine Accumulate to the REAL global accum slot right before dispatch renders the sun (CS SetupSunLight alignment; no armed caster-collection flags)
 }
 
 // P1c-3 shader replacement pipeline gate.

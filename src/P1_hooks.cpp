@@ -2166,24 +2166,28 @@ namespace ShadowLimitFixNS::P1
 						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex),
 					drtd.drawFocusShadows ? 1 : 0);
 			}
-			// fix54 (2026-09-09): CS SetupSunLight alignment. Four sun
-			// renders hung after the fix48 armed walk armed the sun to a
-			// THROWAWAY local slot (= descriptor[0].shadowmapIndex):
-			// 01:46 / 01:59 / 11:04:59 (EngineFixes AV) / 11:41:10
-			// (EngineFixes disabled - still hung). CS renders the sun from
-			// Light[0] after SetupSunLight accumulates it to the engine's
-			// REAL global accum slot every frame right before Render. Do
-			// the same here (directional only - point lights keep the
-			// proven path).
+			// fix55 (2026-09-09): CS SetupSunLight alignment, BARE accumulate.
+			// fix54's armed re-collection (SetCurrentCullLight + heal-attach)
+			// is a CULL-ONLY mode for point lights - the 12:04 session proved
+			// it never fills the engine accumulator (post-accum sceneAccum=0,
+			// geom unchanged 2016->2016): the sun's geomList was already full,
+			// so the armed walk was noise AND the accumulator entry that
+			// BSShadowLight::Render's geometry loop walks stayed empty. Five
+			// sun-render hangs (01:46 / 01:59 / 11:04:59 / 11:41:10 /
+			// 12:04:45) all rendered with sceneAccum=0. CS accumulates the
+			// sun bare (no armed flags) to the engine's REAL global accum
+			// slot every frame right before Render and renders it fine.
+			// Mirror that exact call shape (directional only - point lights
+			// keep the proven path).
 			if (s.light->GetIsDirectionalLight()) {
-				static std::uint32_t s_fix54Log = 0;
-				if (diagLights || (s_fix54Log++ & 0x1Fu) == 0)
-					SKSE::log::info("[SLF] fix54 sun pre-render real-slot armed accumulate");
-				ShadowLimitFixNS::P1::SunArmedAccumulateRealSlot();
+				static std::uint32_t s_fix55Log = 0;
+				if (diagLights || (s_fix55Log++ & 0x1Fu) == 0)
+					SKSE::log::info("[SLF] fix55 sun pre-render bare real-slot accumulate");
+				ShadowLimitFixNS::P1::SunBareAccumulateRealSlot();
 				if (diagLights) {
-					auto& a54 = s.light->GetRuntimeData();
-					SKSE::log::info("[SLF] fix54 sun post-accum: sceneAccum={} geom={}",
-						static_cast<std::uint32_t>(a54.sceneAccumArray.size()),
+					auto& a55 = s.light->GetRuntimeData();
+					SKSE::log::info("[SLF] fix55 sun post-accum: sceneAccum={} geom={}",
+						static_cast<std::uint32_t>(a55.sceneAccumArray.size()),
 						static_cast<std::uint32_t>(s.light->geomList.size()));
 				}
 			}
