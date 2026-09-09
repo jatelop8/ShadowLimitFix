@@ -373,18 +373,17 @@ namespace ShadowLimitFixNS::P1
 // never runs against the 127-slice array -> the v8-exp2 crash site is never
 // reached. Phase 1 output must equal v7-vanilla (sun + engine-budget
 // lights); phase 2 appends SLF-managed lights at slots 8..29.
-// fix64 (2026-09-09, 3-step comprehensive): STEP 1 = 0. Full audit
-// (9-03..9-09) proved 127-slice expansion and engine dispatch are
-// mutually exclusive (9-04 KNOWN FATAL crash-2026-09-04-16-41-43:
-// engine 8-slot state machine vs 127-slice array) and the v10
-// manual-dispatch route structurally AVs on the sun (WER dumps). 0
-// restores the 9-03 v7-vanilla config the user confirmed ('太阳影子
-// 回来了') - engine 100% native: sun/shadow/lighting/stability all
-// vanilla. Step 2 re-adds engine-facing expansion the CS way
-// (Hook_AccumulatedLightsArray accumulator resize so the ENGINE
-// dispatch addresses the extended array). Step 3 unlocks >4 shadows
-// via the cb2[29] clamp patch on that base.
-#define ENABLE_P1B 0
+// fix64 step2 (2026-09-09): 1 again - STEP 2 of the comprehensive 3-step.
+// Step 1 (ENABLE_P1B=0) confirmed engine-native sun/sunlight/stability
+// AND exposed EngineFixes.toml (two shadow hooks disabled since 09-09
+// morning) as the separate crash source behind the repeated
+// EngineFixes+0x2CFB1 AVs - restored to original. Step 2 hypothesis:
+// SLF's aggressive 127-slice expansion overflowed the engine's shadow
+// state machine (CS runs ShadowLightCount=16 default and renders the
+// sun fine; SLF's 127 made the sun's cascade render call through a
+// corrupted pointer - WER dumps). Cap the expansion at 30 slices (still
+// covers the 21-24 scheduled lights) and re-test the sun render.
+#define ENABLE_P1B 1
 
 // Skip the vanilla shadow-light render dispatch at the render-loop call
 // site (Hook_RenderShadowLights sets ctx.Rax=0). This recipe was cross-verified upstream,
