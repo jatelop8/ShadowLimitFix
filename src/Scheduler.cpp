@@ -2131,4 +2131,47 @@ namespace ShadowLimitFixNS::P1
 		stl::detour_thunk<Hook_CalculateActiveShadowCasters>(REL::RelocationID(100419, 107137));
 		SKSE::log::info("[SLF] P1c-1b scheduler installed");
 	}
+
+	// fix54 (2026-09-09): CS SetupSunLight alignment for the sun's manual
+	// render. Four consecutive sun-render hangs (01:46/01:59/11:04:59/11:41:10)
+	// share one signature: fix45 pre-render #0 (sun slot=0 dyn=0 acc=0
+	// geom=2000+ nd=2 idx0=0 focus=0) then BSShadowLight::Render NEVER
+	// returns - clean exit, no WER. EngineFixes hooks are irrelevant (11:41
+	// reproduced them disabled). The fix48 armed walk (RegisterEngineAccum-
+	// Lights, v10-phase1c block) accumulated the sun to a THROWAWAY local
+	// slot (= descriptor[0].shadowmapIndex); CS renders the sun from
+	// Light[0] after SetupSunLight accumulates it to the engine's REAL
+	// global accum slot every frame right before Render (open-shaders
+	// ShadowScheduler.cpp:1189-1212 SetupSunLight + 3205-3212
+	// RenderScheduledShadowLights "Sun first"). Re-run the armed caster
+	// walk against the real slot counter immediately before dispatch
+	// renders the sun, CS-style.
+	void SunArmedAccumulateRealSlot()
+	{
+		auto* ssn = GetShadowSceneNode();
+		if (!ssn)
+			return;
+		auto* sun = ssn->GetRuntimeData().sunShadowDirLight;
+		if (!sun)
+			return;
+		auto& rtd = sun->GetRuntimeData();
+		auto& descs = rtd.shadowmapDescriptors;
+		if (descs.empty())
+			return;
+		for (auto& d : descs) {
+			if (!d.shaderAccumulator)
+				return;  // engine still rebuilding shadow state post-load
+		}
+		if (sun->shadowMapCount > descs.size())
+			return;
+		SetCurrentCullLight(sun);
+		struct ClearCull
+		{
+			~ClearCull() { SetCurrentCullLight(nullptr); }
+		} clearGuard;
+		s_healAttached.clear();
+		s_accumRebuildAttach.store(sun->geomList.empty(), std::memory_order_relaxed);
+		sun->Accumulate(*GetAccumLightSlot(), 0, nullptr);
+		s_accumRebuildAttach.store(false, std::memory_order_relaxed);
+	}
 }

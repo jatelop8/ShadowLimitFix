@@ -2166,6 +2166,27 @@ namespace ShadowLimitFixNS::P1
 						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex),
 					drtd.drawFocusShadows ? 1 : 0);
 			}
+			// fix54 (2026-09-09): CS SetupSunLight alignment. Four sun
+			// renders hung after the fix48 armed walk armed the sun to a
+			// THROWAWAY local slot (= descriptor[0].shadowmapIndex):
+			// 01:46 / 01:59 / 11:04:59 (EngineFixes AV) / 11:41:10
+			// (EngineFixes disabled - still hung). CS renders the sun from
+			// Light[0] after SetupSunLight accumulates it to the engine's
+			// REAL global accum slot every frame right before Render. Do
+			// the same here (directional only - point lights keep the
+			// proven path).
+			if (s.light->GetIsDirectionalLight()) {
+				static std::uint32_t s_fix54Log = 0;
+				if (diagLights || (s_fix54Log++ & 0x1Fu) == 0)
+					SKSE::log::info("[SLF] fix54 sun pre-render real-slot armed accumulate");
+				ShadowLimitFixNS::P1::SunArmedAccumulateRealSlot();
+				if (diagLights) {
+					auto& a54 = s.light->GetRuntimeData();
+					SKSE::log::info("[SLF] fix54 sun post-accum: sceneAccum={} geom={}",
+						static_cast<std::uint32_t>(a54.sceneAccumArray.size()),
+						static_cast<std::uint32_t>(s.light->geomList.size()));
+				}
+			}
 			s.light->Render(idx);   // engine virtual: draws this light's shadows
 			if (diagLights)
 				SKSE::log::info("[SLF] fix45 post-render #{} slot={} ok", i, s.slot);
