@@ -435,7 +435,26 @@ namespace ShadowLimitFixNS::P1
 // scheduled point lights, the user's target architecture holds. If it
 // crashes, engine dispatch + any count>8 remains fatal and the sun needs
 // the accumulator-isolation variant (engine walk sees sun only).
-#define SLF_SKIP_VANILLA_DISPATCH 0
+//
+// fix66 EXPERIMENT A VERDICT (crash 21:46:07, RIP=0 null call at
+// SkyrimSE.exe+14CC1A2 - the SAME 14CC19E/14CC1A2 null-vtable site as
+// v8-exp2 (09-03) and fix20 (09-04)): crashed on first outdoor shadow
+// render ~90s in, exactly as predicted. BUT the experiment was NOT
+// single-variable: SLF_MANUAL_RENDER stayed 1, so SLF's own dispatch
+// rendered the scheduled point lights WHILE the engine dispatch ran =
+// the duplicate-render configuration v8-exp2 explicitly warned against
+// ("With SLF_SKIP_VANILLA_DISPATCH=0 the engine itself dispatches;
+// running OUR manual dispatch on top was a duplicate-render
+// configuration"). Crash context: ShadowSceneNode Active Lights=26,
+// RBX=26, R15=Sun -> the engine walk dispatched against per-light state
+// SLF's dispatch had just mutated. ROLLED BACK to 1 (step3c stable:
+// indoor 21-30 lights + no freeze + no crash, sun render deferred to
+// the engine-side fix). Next variant must NOT run both dispatchers on
+// the same lights: either (a) engine dispatch + SLF dispatch confined
+// to disjoint slices (SLF only slot>=8, engine only accumulator 0..7),
+// or (b) single dispatcher that renders sun (engine) AND point lights
+// (ours) by short-circuiting per-light in the hook.
+#define SLF_SKIP_VANILLA_DISPATCH 1
 
 // P1b full mode - real depth-buffer expansion (>8 slices) + render-loop hook.
 // slice=8 mechanism verified in-game (00:37) -> enable full mode for slice=9.
