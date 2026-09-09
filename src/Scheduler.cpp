@@ -1988,8 +1988,22 @@ namespace ShadowLimitFixNS::P1
 					// settle window; the fix51 camDflt gate in the dispatch
 					// loop additionally skips any light whose camera is
 					// still the default unit box.
+					// fix52 (2026-09-09): 240 -> 120. The 10:46-10:47 session
+					// (user "still no sun") showed the real cost: a camera
+					// jump gate (360 ticks ~9.2 s at ~39 ticks/s) plus a 240
+					// grace (~5 s) = ~14 s of zero shadow rendering after any
+					// outdoor teleport. The player quit inside the grace
+					// window (log ends 10:47:21.0, grace would have ended
+					// ~10:47:21.8) - the fix51 sun-render path was NEVER
+					// exercised. The camDflt guard is the real render-safety
+					// fence (it skips any light whose camera is the default
+					// unit box); the grace is only a cold-start buffer, and
+					// 240 ticks of pure dead time is what the user perceives
+					// as "sun gone". 120 (~2-3 s) still clears the engine
+					// settle window without a ~14 s shadow outage.
 					ShadowLimitFixNS::P1::g_shadowWritesFrozen.store(false, std::memory_order_release);
-					ShadowLimitFixNS::P1::g_resumeGrace.store(240, std::memory_order_release);
+					ShadowLimitFixNS::P1::g_resumeGrace.store(120, std::memory_order_release);
+					SKSE::log::info("[SLF] fix52 resume grace armed: dispatch parked {} ticks before live", 120u);
 				} else if ((s_log++ & 0x3Fu) == 0) {
 					SKSE::log::info("[SLF] world-switch gate: cooldown {} ticks left, writes frozen", s_cooldown);
 				}
