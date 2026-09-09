@@ -418,7 +418,24 @@ namespace ShadowLimitFixNS::P1
 // can NEVER be the dispatcher; WE must own dispatch. Flicker root cause
 // stays at the consumer end (engine t14 4-channel mask), not producible
 // by any isolation run. ROLLED BACK to 1.
-#define SLF_SKIP_VANILLA_DISPATCH 1
+//
+// fix66 (2026-09-09 17:1x) EXPERIMENT A: 1 -> 0. User decision: let the
+// ENGINE render the sun; SLF renders point lights only. The KNOWN-fatal
+// verdict above was reached under the PIN era (SLF wrote extended lights
+// INTO the engine accumulator -> engine dispatch walked >8 lights whose
+// shadowMapIndex overflowed the engine's internal descriptor arrays ->
+// garbage light -> RIP=0 null vtable call at 14CC19E/14CC1A2). fix41
+// dropped PIN: the accumulator now holds ONLY what func() (the engine's
+// own CalculateActiveShadowCasters) accumulates = sun + engine-budget
+// point lights <= 8, all addressable by the engine's 8-slot state
+// machine inside the count=30 array (slices 0-7 == vanilla indices).
+// Engine dispatch under count=30 WITHOUT PIN was never tested (fix64
+// step2 kept rax=0). If the engine walk renders the sun cascade (native
+// context -> no AV, sunlight maintained) while our dispatch renders the
+// scheduled point lights, the user's target architecture holds. If it
+// crashes, engine dispatch + any count>8 remains fatal and the sun needs
+// the accumulator-isolation variant (engine walk sees sun only).
+#define SLF_SKIP_VANILLA_DISPATCH 0
 
 // P1b full mode - real depth-buffer expansion (>8 slices) + render-loop hook.
 // slice=8 mechanism verified in-game (00:37) -> enable full mode for slice=9.
