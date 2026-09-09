@@ -1184,7 +1184,9 @@ namespace ShadowLimitFixNS::P1
 		static std::uint32_t s_prevAccumN = 0;
 		static std::uint32_t s_accDiag = 0;
 		static std::uint32_t s_churnTotal = 0;
-		if (((s_accDiag++) & 0x7Fu) == 0) {
+		// fix69: sampling 128->32 frames - a sub-128-frame churn cycle (the
+		// 'lamp pops at fixed angle' signature) was invisible at 128.
+		if (((s_accDiag++) & 0x1Fu) == 0) {
 			std::uint32_t accN = 0;
 			char accLine[512];
 			int accOff = 0;
@@ -2048,9 +2050,10 @@ namespace ShadowLimitFixNS::P1
 		static std::uint32_t s_n = 0;
 		// fix31: activation-layer probe (throttled to every 128th scheduler
 		// invocation so it never perturbs frame timing).
+		// fix69: activation probe sampling 128->32 (same sub-128 rationale).
 		{
 			static std::uint32_t s_act = 0;
-			if ((s_act++ & 0x7Fu) == 0)
+			if ((s_act++ & 0x1Fu) == 0)
 				ActiveLightProbe();
 		}
 		s_fNs += static_cast<std::uint64_t>(

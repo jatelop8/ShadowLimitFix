@@ -1921,6 +1921,123 @@ namespace ShadowLimitFixNS::P1
 	static std::atomic<RE::BSShadowLight*> s_renderingLight{ nullptr };
 	static std::atomic<std::uint32_t> s_renderingSlot{ 0xFFFFFFFFu };
 
+	// ---------------------------------------------------------------------
+	// fix69 (2026-09-09): flicker + sun-state probe. Indoor lamps 'pop
+	// on/off' at a fixed angle - the scheduled set churns frame-to-frame
+	// (a lamp leaves/enters or two swap order), or a lamp's shadow camera
+	// alternates placed/unplaced (camSkip swings), or the accumulator the
+	// engine feeds us changes membership. This probe diffs the scheduled
+	// set + render outcome against the PREVIOUS dispatch call and logs
+	// ONLY changes (event-driven, no per-frame spam), plus a throttled
+	// baseline row that also carries the directional (sun) light's full
+	// state. The sun is skipped by the render loop (fix64 step3), so this
+	// row shows whether the ENGINE still maintains it (camera placed?
+	// caster geometry present? lodDimmer alive?) while nobody renders its
+	// cascade - data decides whether 'no sunlight' = parameters frozen by
+	// the skipped sun render, or the sun never even enters our set.
+	// ---------------------------------------------------------------------
+	static void FlickerSunProbe(std::uint32_t n, std::uint32_t rendered,
+		std::uint32_t dirSkipped, std::uint32_t camSkipped)
+	{
+		static std::uint32_t s_call = 0;
+		const std::uint32_t call = ++s_call;
+		static std::array<uintptr_t, 128> s_prevPtr{};
+		static std::uint32_t s_prevN = 0;
+		static std::uint32_t s_prevRendered = 0;
+		static std::uint32_t s_prevCamSkip = 0;
+
+		// fingerprint of the current set (order matters: a swap changes
+		// which light owns which shadow slice even when the set is equal)
+		std::array<uintptr_t, 128> curPtr{};
+		curPtr.fill(0);
+		for (std::uint32_t i = 0; i < n && i < curPtr.size(); i++) {
+			auto& fs = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
+			curPtr[i] = fs.light ? reinterpret_cast<uintptr_t>(fs.light) : 0;
+		}
+		const bool countSwung = n != s_prevN || rendered != s_prevRendered ||
+			camSkipped != s_prevCamSkip;
+		bool orderChanged = false;
+		if (!countSwung) {
+			for (std::uint32_t i = 0; i < n && i < s_prevPtr.size(); i++) {
+				if (curPtr[i] != s_prevPtr[i]) {
+					orderChanged = true;
+					break;
+				}
+			}
+		}
+		if (countSwung || orderChanged) {
+			std::string det;
+			for (std::uint32_t i = 0; i < n; i++) {
+				if (i < s_prevN && curPtr[i] != 0 && curPtr[i] == s_prevPtr[i])
+					continue;
+				auto& fs = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
+				if (!fs.light)
+					continue;
+				char fb[150];
+				std::snprintf(fb, sizeof(fb), "%s#%u[%s]0x%llx@(%.0f,%.0f,%.0f)",
+					det.empty() ? "" : ",", fs.slot, fs.slot < 8u ? "E" : "S",
+					static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(fs.light)),
+					fs.light->light->world.translate.x,
+					fs.light->light->world.translate.y,
+					fs.light->light->world.translate.z);
+				det += fb;
+			}
+			SKSE::log::info("[SLF][FLK] call={} set n={}->{} rendered={}->{} dirSkip={} camSkip={}->{}{}",
+				call, s_prevN, n, s_prevRendered, rendered, dirSkipped,
+				s_prevCamSkip, camSkipped, det.empty() ? "" : (" | " + det));
+		}
+		s_prevPtr = curPtr;
+		s_prevN = n;
+		s_prevRendered = rendered;
+		s_prevCamSkip = camSkipped;
+
+		// throttled baseline + sun state (every 32nd dispatch call)
+		if ((call & 0x1Fu) == 1) {
+			std::uint32_t sunSlot = 0xFFFFFFFFu;
+			bool sunCamDflt = true;
+			bool sunOrtho = false;
+			float sfL = 0, sfR = 0, sfT = 0, sfB = 0, sfN = 0, sfF = 0;
+			float sx = 0, sy = 0, sz = 0;
+			std::uint32_t sunGeom = 0, sunAcc = 0, sunNd = 0, sunIdx0 = 0xFFFFFFFFu;
+			float sunLod = -1.0f;
+			for (std::uint32_t i = 0; i < n; i++) {
+				auto& fs = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
+				if (!fs.light || !fs.light->GetIsDirectionalLight())
+					continue;
+				sunSlot = fs.slot;
+				sunLod = fs.light->lodDimmer;
+				sunGeom = static_cast<std::uint32_t>(fs.light->geomList.size());
+				auto& frtd = fs.light->GetRuntimeData();
+				sunAcc = static_cast<std::uint32_t>(frtd.sceneAccumArray.size());
+				auto& fdescs = frtd.shadowmapDescriptors;
+				sunNd = static_cast<std::uint32_t>(fdescs.size());
+				if (!fdescs.empty()) {
+					sunIdx0 = fdescs[0].shadowmapIndex;
+					if (fdescs[0].camera) {
+						const auto& pfr = fdescs[0].camera->GetRuntimeData2().viewFrustum;
+						sunCamDflt = pfr.fLeft == -1.0f && pfr.fRight == 1.0f &&
+							pfr.fTop == 1.0f && pfr.fBottom == -1.0f &&
+							pfr.fNear == 0.1f && pfr.fFar == 1.0f;
+						sunOrtho = pfr.bOrtho != 0;
+						sfL = pfr.fLeft; sfR = pfr.fRight; sfT = pfr.fTop;
+						sfB = pfr.fBottom; sfN = pfr.fNear; sfF = pfr.fFar;
+						const auto& cp = fdescs[0].camera->world.translate;
+						sx = cp.x; sy = cp.y; sz = cp.z;
+					}
+				}
+				break;
+			}
+			if (sunSlot != 0xFFFFFFFFu) {
+				SKSE::log::info("[SLF][SUN] call={} n={} rendered={} sun slot={} idx0={} nd={} camDflt={} ortho={} fr(l={:.1f} r={:.1f} t={:.1f} b={:.1f} n={:.1f} f={:.1f}) cpos=({:.0f},{:.0f},{:.0f}) geom={} acc={} lod={:.2f}",
+					call, n, rendered, sunSlot, sunIdx0, sunNd, sunCamDflt ? 1 : 0, sunOrtho ? 1 : 0,
+					sfL, sfR, sfT, sfB, sfN, sfF, sx, sy, sz, sunGeom, sunAcc, sunLod);
+			} else {
+				SKSE::log::info("[SLF][SUN] call={} n={} rendered={} NO directional light in scheduled set",
+					call, n, rendered);
+			}
+		}
+	}
+
 	static void RenderScheduledShadowLightsDispatch()
 	{
 		// fix46 (2026-09-08): the world-switch gate zeroes the scheduled
@@ -2031,6 +2148,8 @@ namespace ShadowLimitFixNS::P1
 		QueryPerformanceCounter(&scA);
 #endif
 		std::uint32_t rendered = 0;
+		std::uint32_t dirSkipped = 0;
+		std::uint32_t camSkipped = 0;
 		std::array<std::uint32_t, 128> postIdx{};
 		postIdx.fill(0xFFFFFFFFu);
 		for (std::uint32_t i = 0; i < n; i++) {
@@ -2050,8 +2169,10 @@ namespace ShadowLimitFixNS::P1
 			// when EngineFixes runs with its stock config (the earlier
 			// 'sunlight vanished' observations were confounded by the
 			// EngineFixes shadow hooks being disabled).
-			if (s.light->GetIsDirectionalLight())
+			if (s.light->GetIsDirectionalLight()) {
+				dirSkipped++;
 				continue;
+			}
 			// v10-phase2-fix (SC-A 21:33): engine Render selects the depth
 			// slice from the light's descriptor shadowmapIndex, but for
 			// slot>=8 lights that field read 0 at render time (engine
@@ -2107,8 +2228,9 @@ namespace ShadowLimitFixNS::P1
 						fr.fNear == 0.1f && fr.fFar == 1.0f;
 				}
 				if (noDesc || camDflt) {
-					static std::uint32_t s_camSkip = 0;
-					if ((s_camSkip++ & 0x3Fu) == 0)
+					camSkipped++;
+					static std::uint32_t s_camSkipLog = 0;
+					if ((s_camSkipLog++ & 0x3Fu) == 0)
 						SKSE::log::info("[SLF] camDflt skip light#{} slot={} (shadow camera not placed)",
 							i, s.slot);
 					continue;
@@ -2155,6 +2277,9 @@ namespace ShadowLimitFixNS::P1
 			}
 			SKSE::log::info("[SLF][POST] rendered {} lights, post-render desc idx:{}", rendered, pr);
 		}
+
+		// fix69: frame-to-frame flicker/sun probe (event-driven, see def).
+		FlickerSunProbe(n, rendered, dirSkipped, camSkipped);
 
 		// fix3 (22:3x): the engine's per-light Render RESETS
 		// descriptor[0].shadowmapIndex on extended (slot >= 8) lights - the
