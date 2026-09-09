@@ -4,15 +4,14 @@ project(ShadowLimitFix)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# CommonLibSSE-NG source build. This fork carries SKSE/ContextHook.h
-# (install_context_hook) and needs SKSE_SUPPORT_XBYAK + vcpkg xbyak.
-# Machine-specific paths must come from -DCOMMONLIB_DIR / -DVCPKG_PREFIX
-# (e.g. via CMakeUserPresets.json), NOT from hard-coded defaults.
+# 独立 CommonLibSSE-NG（源码构建——CS fork，含 SKSE/ContextHook.h 的
+# install_context_hook，需要 SKSE_SUPPORT_XBYAK + vcpkg xbyak）
 if(NOT DEFINED COMMONLIB_DIR)
-    message(FATAL_ERROR "COMMONLIB_DIR must be set (path to CommonLibSSE-NG sources)")
+    set(COMMONLIB_DIR "D:/Modding/open-shaders/extern/CommonLibSSE-NG")
 endif()
+
 if(NOT DEFINED VCPKG_PREFIX)
-    message(FATAL_ERROR "VCPKG_PREFIX must be set (vcpkg installed/x64-windows-static-md)")
+    set(VCPKG_PREFIX "E:/vcpkg-full/installed/x64-windows-static-md")
 endif()
 
 set(CommonLibPath "${COMMONLIB_DIR}")
@@ -35,25 +34,26 @@ target_compile_options(${PROJECT_NAME} PUBLIC
     "$<$<CONFIG:RELEASE>:/Zi;/fp:fast;/GL;/Gy-;/O2;/Ob2;/Oi;/Ot;/Oy>"
 )
 
-# CommonLibSSE-NG sources (IPO check skipped - MSBuild crashes in some envs)
+# CommonLibSSE-NG 源码（跳过 IPO 检查——某些环境 MSBuild 崩溃）
 set(_CMAKE_CXX_IPO_MAY_BE_SUPPORTED_BY_COMPILER FALSE CACHE INTERNAL "skip IPO check")
 set(_CMAKE_C_IPO_MAY_BE_SUPPORTED_BY_COMPILER FALSE CACHE INTERNAL "skip IPO check")
 add_subdirectory(${CommonLibPath} ${CommonLibName} EXCLUDE_FROM_ALL)
 
-# Dependencies from the vcpkg prebuilt tree
+# 依赖：spdlog / directxtk（CommonLibSSE-NG 需要），从 vcpkg 预装库查找
 find_package(spdlog CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
-# Detours - the only sane hook base (auto register save/trampoline/2GB rel32;
-# hand-rolled hooks crashed on rel32 overflow and register clobbering).
+# Detours（成熟 hook 库——自动处理寄存器保存/trampoline/2GB 跳转，
+# 手写 hook 的 rel32 溢出+寄存器污染两个崩溃教训证明必须用它）
 find_library(DETOURS_LIBRARY detours REQUIRED)
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${VCPKG_PREFIX}/include" src)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE CommonLibSSE::CommonLibSSE spdlog::spdlog "${DETOURS_LIBRARY}")
 
+# DX 库（P1 起 shader 替换用）
 target_link_libraries(${PROJECT_NAME} PRIVATE d3d11 dxgi d3dcompiler)
 
-# Optional post-build deploy to a game mod folder (-DPLUGIN_DEPLOY_DIR=...)
+# 生成后复制到游戏 mod 目录（-DPLUGIN_DEPLOY_DIR 指定）
 if(DEFINED PLUGIN_DEPLOY_DIR)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

@@ -39,12 +39,9 @@ namespace ShadowLimitFixNS
 // died earlier in the plugin load loop (another plugin's Load).
 static void TraceLoad(const char* a_stage)
 {
-	if (auto dir = SKSE::log::log_directory(); dir) {
-		const auto p = *dir / "ShadowLimitFix_trace.txt";
-		if (auto* f = std::fopen(p.string().c_str(), "a")) {
-			std::fprintf(f, "[%08X] %s\n", GetCurrentThreadId(), a_stage);
-			std::fclose(f);
-		}
+	if (auto* f = std::fopen("C:/Users/Administrator/Documents/My Games/Skyrim Special Edition/SKSE/ShadowLimitFix_trace.txt", "a")) {
+		std::fprintf(f, "[%08X] %s\n", GetCurrentThreadId(), a_stage);
+		std::fclose(f);
 	}
 }
 
@@ -57,24 +54,20 @@ static void TraceLoad(const char* a_stage)
 LONG WINAPI SLFExceptionFilter(EXCEPTION_POINTERS* a_ep)
 {
 	// Write to a separate file - spdlog may be unsafe mid-crash.
-	// NOTE: resolve the SKSE log dir (OneDrive/MO2-safe); a bare relative
-	// "Data/SKSE/..." fails under MO2 (virtual Data dir).
-	if (auto dir = SKSE::log::log_directory(); dir) {
-		const auto p = *dir / "ShadowLimitFix_crash.txt";
-		if (auto* f = std::fopen(p.string().c_str(), "a")) {
-			std::fprintf(f, "[SLF] EXCEPTION code=%08X at %p thread=%lu\n",
-				static_cast<unsigned>(a_ep->ExceptionRecord->ExceptionCode),
-				a_ep->ExceptionRecord->ExceptionAddress,
-				GetCurrentThreadId());
-			if (a_ep->ContextRecord) {
-				auto* c = a_ep->ContextRecord;
-				std::fprintf(f, "  RAX=%016llX RBX=%016llX RCX=%016llX RDX=%016llX\n", c->Rax, c->Rbx, c->Rcx, c->Rdx);
-				std::fprintf(f, "  RSI=%016llX RDI=%016llX RBP=%016llX RSP=%016llX\n", c->Rsi, c->Rdi, c->Rbp, c->Rsp);
-				std::fprintf(f, "  R8 =%016llX R9 =%016llX R10=%016llX R11=%016llX\n", c->R8, c->R9, c->R10, c->R11);
-				std::fprintf(f, "  R12=%016llX R13=%016llX R14=%016llX R15=%016llX\n", c->R12, c->R13, c->R14, c->R15);
-			}
-			std::fclose(f);
+	// NOTE: absolute path - "Data/SKSE/..." fails under MO2 (virtual Data dir).
+	if (auto* f = std::fopen("C:/Users/Administrator/Documents/My Games/Skyrim Special Edition/SKSE/ShadowLimitFix_crash.txt", "a")) {
+		std::fprintf(f, "[SLF] EXCEPTION code=%08X at %p thread=%lu\n",
+			static_cast<unsigned>(a_ep->ExceptionRecord->ExceptionCode),
+			a_ep->ExceptionRecord->ExceptionAddress,
+			GetCurrentThreadId());
+		if (a_ep->ContextRecord) {
+			auto* c = a_ep->ContextRecord;
+			std::fprintf(f, "  RAX=%016llX RBX=%016llX RCX=%016llX RDX=%016llX\n", c->Rax, c->Rbx, c->Rcx, c->Rdx);
+			std::fprintf(f, "  RSI=%016llX RDI=%016llX RBP=%016llX RSP=%016llX\n", c->Rsi, c->Rdi, c->Rbp, c->Rsp);
+			std::fprintf(f, "  R8 =%016llX R9 =%016llX R10=%016llX R11=%016llX\n", c->R8, c->R9, c->R10, c->R11);
+			std::fprintf(f, "  R12=%016llX R13=%016llX R14=%016llX R15=%016llX\n", c->R12, c->R13, c->R14, c->R15);
 		}
+		std::fclose(f);
 	}
 	return EXCEPTION_CONTINUE_SEARCH;  // let CrashLogger / default handler also run
 }

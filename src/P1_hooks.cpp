@@ -1,11 +1,6 @@
 // P1_hooks.cpp - P1: engine hook installation framework
 // NOT yet in CMakeLists.txt - enabled only after P0 passes in-game.
-//
-// ATTRIBUTION (original names preserved, see THIRD_PARTY.md):
-//   Hook targets and install patterns cross-verified against Community
-//   Shaders / Open Shaders (github.com/alandtse/open-shaders, GPL-3.0 WITH
-//   Modding Exception) - ShadowEngineHooks.cpp / LightLimitFix reference.
-//   REL-ID facts; no runtime dependency on any other mod.
+// All install patterns verified from Community Shaders:
 //   src/Features/LightLimitFix/ShadowEngineHooks.cpp
 //
 // Phases:
@@ -1894,13 +1889,13 @@ namespace ShadowLimitFixNS::P1
 	// P1c-2: drive the engine's own per-light shadow render. The vanilla
 	// call this hook replaces was the ONLY producer of kSHADOWMAPS depth;
 	// skipping it (ctx.Rax=0) leaves every slice empty (RL readback = 0%,
-	// verified 14:03). an upstream mod replaces that same call site (100415/107133) and
+	// verified 14:03). LLF replaces that same call site (100415/107133) and
 	// manually calls each scheduled light's BSShadowLight::Render - the
 	// engine's per-light shadow render (vtable 0A in the CommonLib fork,
 	// same vtable walk the vanilla dispatch performed). We replicate it with
 	// OUR scheduler's list.
 	//
-	// Render arg = 0 for every light (the upstream in-game-verified recipe, sun
+	// Render arg = 0 for every light (the LLF in-game-verified recipe, sun
 	// and points alike). The slice a light renders into is NOT selected by
 	// this arg - it comes from the light's descriptor[0].shadowmapIndex
 	// (which our scheduler wrote = slot) via the engine's depth-target
@@ -1921,102 +1916,9 @@ namespace ShadowLimitFixNS::P1
 	static std::atomic<RE::BSShadowLight*> s_renderingLight{ nullptr };
 	static std::atomic<std::uint32_t> s_renderingSlot{ 0xFFFFFFFFu };
 
-	// fix60 (2026-09-09): SEH guard around the engine Render call. The
-	// 13:09 WER dump (CrashDumps/SkyrimSE.exe.38632.dmp) proved the eight
-	// 'sun render hangs' are actually engine AVs, not infinite loops: the
-	// faulting RIP executed at 0x11B8AD7400 - OUTSIDE every loaded module,
-	// i.e. a call through a corrupted pointer - faulting on a read of
-	// address 0x8. The gate outage corrupts engine shadow-pass state and
-	// the sun's directional cascade Render then calls through a bad
-	// pointer. CS wraps its per-light render in __try/__except
-	// (SafeEnableAndValidate, ShadowScheduler.cpp:1164) for exactly this
-	// class of failure. __declspec(noinline) is load-bearing: MSVC
-	// rejects __try in a frame that also holds C++ unwinding objects.
-	__declspec(noinline) static bool SafeLightRender(RE::BSShadowLight* a_light, std::uint32_t a_idx,
-		std::uint32_t a_slot, std::uint32_t a_li)
-	{
-		__try {
-			a_light->Render(a_idx);
-			return true;
-		} __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-			SKSE::log::error("[SLF] fix60 SEH caught AV in Render light#{} slot={} light=0x{:x} - skipped this frame",
-				a_li, a_slot, reinterpret_cast<uintptr_t>(a_light));
-			return false;
-		}
-	}
-
 	static void RenderScheduledShadowLightsDispatch()
 	{
-		// fix46 (2026-09-08): the world-switch gate zeroes the scheduled
-		// list the moment it freezes (see Scheduler.cpp freeze()) and this
-		// hook must NOT render anything while the gate is frozen either -
-		// on a no-load-menu cell transition (outdoor boundary walk /
-		// teleport / camera jump) this hook keeps firing every frame while
-		// the scheduler fill side is gated, and a list that was NOT yet
-		// zeroed (or a stale local n from before the freeze) could render a
-		// light the cell unload just released -> clean exit with no dump
-		// (00:04:14 session, died ~1s after the camera-jump gate fired).
-		// The flag is also kept true across the fix45 resume grace (the
-		// scheduler learns the fresh accumulator while we stay parked).
-		if (ShadowLimitFixNS::P1::g_shadowWritesFrozen.load(std::memory_order_acquire)) {
-			static std::uint32_t s_frozenLog = 0;
-			if ((s_frozenLog++ & 0xFFu) == 0)
-				SKSE::log::info("[SLF] fix46 dispatch parked (world-switch gate frozen)");
-			return;
-		}
-
 		const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
-		// fix45 (2026-09-08): resume grace. After a world-switch gate
-		// cooldown ends, the scheduler re-learns the engine accumulator
-		// immediately but the per-light Render state was just rebuilt by
-		// the load; the FIRST post-resume dispatch froze inside one shadow
-		// pass (23:46 session, OMSet stopped at 3490 while draws raced
-		// ~60k/s for 20+s). Park the dispatch while the grace counter is
-		// armed (scheduler still fills the list each frame), then for the
-		// first 16 live frames log every per-light Render so a repeat
-		// freeze pinpoints the exact light.
-		static std::uint32_t s_afterGrace = 0;
-		static std::uint32_t s_sunWarmup = 0;  // fix56: armed on dispatch-live, decremented per frame
-		{
-			const std::uint32_t g = ShadowLimitFixNS::P1::g_resumeGrace.load(std::memory_order_acquire);
-			if (g > 0) {
-				// fix52: log on the FIRST parked tick (was: only when g==96,
-				// which with the fix51 240-tick arm produced a misleadingly
-				// late "parked 96 ticks" row ~2.4 s after the cooldown).
-				static std::uint32_t s_graceLog = 0;
-				if ((s_graceLog++ & 0xFFu) == 0 || g == 48)  // fix53: first armed tick
-					SKSE::log::info("[SLF] fix45 resume grace: manual dispatch parked {} ticks (load-settled render state)", g);
-				ShadowLimitFixNS::P1::g_resumeGrace.store(g - 1, std::memory_order_release);
-				s_afterGrace = 16;  // diagnostic window once we come back live
-				return;
-			}
-		}
-		const bool diagLights = s_afterGrace > 0;
-		if (diagLights && (--s_afterGrace == 15)) {
-			SKSE::log::info("[SLF] fix45 grace over - dispatch live, per-light diagnostic for {} frames", 16u);
-			// fix56 (2026-09-09): sun warmup window. Six sun-render hangs
-			// (01:46/01:59/11:04/11:41/12:04/12:16) ALL fired on the first
-			// dispatch frame after a world-switch gate, with a state-healthy
-			// sun (geom=2016 nd=2 camDflt=0) - and 9-06 rendered the sun
-			// fine with NO gate (dispatch never stopped). The 12:16 session
-			// pinned the hang to inside Render() BEFORE the draw-time DSV
-			// select (no SelectDSB row after post-accum). Hypothesis: after
-			// a ~4-9s total shadow-render outage the ENGINE's shadow-pass
-			// context needs a few active dispatch frames to rebuild before a
-			// directional cascade render is safe. Skip the sun for the
-			// first kLiveFrames of the resumed dispatch (point lights keep
-			// rendering) and log every skip, so the log shows whether the
-			// sun survives a warm start (fix = outage-context) or still
-			// hangs on frame kLiveFrames+1 (fix = sun render path itself).
-			// fix57 (2026-09-09): sun warmup REMOVED. The fix56 32-frame
-			// warmup did not help - the 7th hang came on frame 33
-			// (12:32:10.800, 32 clean warmup frames at ~53fps first) - and
-			// the sun no longer renders through this dispatch at all
-			// (fix57 dir skip above). s_sunWarmup stays 0 and the warmup
-			// skip block below is unreachable for directional lights.
-		}
-		if (diagLights)
-			SKSE::log::info("[SLF] fix45 diag: dispatch n={}", n);
 
 		static std::uint32_t s_dispatchFrame = 0;
 		const bool logNow = (++s_dispatchFrame & 0x3Fu) == 0;
@@ -2087,83 +1989,6 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
-			// fix62 (2026-09-09): the sun IS rendered again, because the
-			// 14:06 user report ("连阳光都没有") proved the sun Render
-			// call also drives the ENGINE's sun-light state: fix61 skipped
-			// the sun entirely and the sun LIGHT vanished with it (fix60,
-			// which called Render(sun) even under the every-frame AV, still
-			// had sunlight). fix62 pairs this with the gate outage cut to
-			// ~2 ticks (Scheduler.cpp) to restore the fix46-less continuous
-			// render cadence under which 9-06 rendered the sun fine: no
-			// multi-second shadow-render outage = no engine shadow-pass
-			// state damage = Render(sun) has a live state to work in.
-			// fix60's SafeLightRender SEH net stays: if Render(sun) still
-			// AVs it is caught and logged instead of taking the process
-			// down, and even the faulting call's partial execution keeps
-			// the engine sun-light state refreshed (fix60 evidence).
-			// fix47 (2026-09-09): post-resume freeze. The first dispatch
-			// after a world-switch gate (01:20:40 session) rendered lights
-			// whose engine Accumulate produced NO casters that frame
-			// (sceneAccumArray empty -> shadow camera not yet placed ->
-			// every caster culled). Engine Render then NEVER returned
-			// (fix45 post-render #0 missing) while shadow-array Draws raced
-			// ~800k/s on slice 0 for 19 s with OMSet frozen at 2772 (never
-			// switching targets) -> hard freeze, clean exit, no WER.
-			// A light with an empty accum list rasterizes zero pixels
-			// anyway (see Scheduler.cpp: "every caster is culled during
-			// Accumulate (sceneAccum=0) and every Render rasterizes zero
-			// pixels"), so skip it until the engine settles - the accum
-			// list fills on a later frame once the camera/frustum is live.
-			// Healthier lights (sceneAccum > 0) are unaffected. Log the
-			// skips so a stall (every light skipped on every frame) is
-			// visible in the log instead of a silent freeze.
-			// fix51 (2026-09-09): render EVERY scheduled light whose shadow
-			// camera is actually PLACED - the sun included. fix50's blanket
-			// sun-skip was wrong: the engine's "own later-frame sun path"
-			// is NOT alive under our rax=0 dispatch (the D3D trace 14:03
-			// clears+draws were the pre-fix47 dispatch's own work), so with
-			// the sun parked and every point light skipped by fix47 the
-			// 10:27 session rendered ZERO lights ([POST] rendered 0 lights
-			// every frame, outdoor n=1 sun-only list + indoor sceneAccum=0
-			// point lights) -> no shadow producer at all -> sun shadow gone
-			// (user: "太阳没出来"). The fix47 freeze guard keyed on
-			// sceneAccumArray==0 was ALSO wrong: the armed accumulate
-			// (SetCurrentCullLight + heal-attach) fills geomList, never
-			// sceneAccumArray, so sceneAccum==0 is the NORM for every
-			// healthy light (v10-phase1 rendered 4/4 indoor lights fine,
-			// fix19o 24/24) - fix47 skipped them all. The real
-			// render-blocking state (01:20:40 freeze: fix45 post-render #0
-			// never returned, draws raced ~800k/s) is an UNPLACED shadow
-			// camera - descriptor[0].camera still carrying the engine's
-			// default unit-box frustum (camDflt=1) or absent. Gate on that
-			// instead: camDflt==1 -> skip until engine UpdateCamera places
-			// it; camDflt==0 (sun included - outdoor census 10:27 shows
-			// sun camDflt=0 with a real ortho box) -> render.
-			{
-				auto& rtd51 = s.light->GetRuntimeData();
-				const bool noDesc = rtd51.shadowmapDescriptors.empty() ||
-					!rtd51.shadowmapDescriptors[0].camera;
-				bool camDflt51 = true;
-				if (!noDesc) {
-					const auto& fr51 = rtd51.shadowmapDescriptors[0].camera->GetRuntimeData2().viewFrustum;
-					camDflt51 = fr51.fLeft == -1.0f && fr51.fRight == 1.0f &&
-						fr51.fTop == 1.0f && fr51.fBottom == -1.0f &&
-						fr51.fNear == 0.1f && fr51.fFar == 1.0f;
-				}
-				if (noDesc || camDflt51) {
-					static std::uint32_t s_skip51 = 0;
-					if (diagLights || (s_skip51++ & 0x3Fu) == 0) {
-						SKSE::log::info("[SLF] fix51 skip light#{} slot={} {} camDflt={} geom={} nd={} idx0={} (shadow camera not placed)",
-							i, s.slot, s.light->GetIsDirectionalLight() ? "dir" : "point",
-							noDesc ? -1 : (camDflt51 ? 1 : 0),
-							static_cast<std::uint32_t>(s.light->geomList.size()),
-							static_cast<std::uint32_t>(rtd51.shadowmapDescriptors.size()),
-							rtd51.shadowmapDescriptors.empty() ? -1 :
-								static_cast<int32_t>(rtd51.shadowmapDescriptors[0].shadowmapIndex));
-					}
-					continue;
-				}
-			}
 			// v10-phase2-fix (SC-A 21:33): engine Render selects the depth
 			// slice from the light's descriptor shadowmapIndex, but for
 			// slot>=8 lights that field read 0 at render time (engine
@@ -2188,61 +2013,8 @@ namespace ShadowLimitFixNS::P1
 				s_renderingLight.store(s.light, std::memory_order_relaxed);
 				s_renderingSlot.store(s.slot, std::memory_order_relaxed);
 			}
-			// fix49 (2026-09-09): scrub drawFocusShadows before EVERY
-			// manual Render, aligned with CS ScrubFocusShadowFlags
-			// (ShadowScheduler.cpp: "a stale flag ... sends
-			// BSShadowParabolicLight::Render into its focus loop on a
-			// non-directional light and CTDs"; CS scrubs every active
-			// light + the sun whenever its shadow budget exceeds 4).
-			// SLF's 127-slice expansion is exactly that regime, and the
-			// 01:46:21 session froze on the FIRST sun Render after a
-			// weather/time-driven world-switch gate - if the engine left
-			// the sun's focus flag set (it re-arms flags while the SLF
-			// gate parks the scheduler), the sun's directional cascade
-			// Render walks the focus path with no focus state mounted ->
-			// infinite loop, clean exit, no WER (same signature as the
-			// 01:20:40 point-light freeze fix47 addressed). CS also
-			// applies lens flare after sun Accumulate; we skip that for
-			// now (render-only cosmetic, not a loop source).
-			{
-				auto& frtd = s.light->GetRuntimeData();
-				if (frtd.drawFocusShadows) {
-					static std::uint32_t s_focusScrub = 0;
-					if (diagLights || (s_focusScrub++ & 0x3Fu) == 0)
-						SKSE::log::info("[SLF] fix49 scrub drawFocusShadows light#{} slot={} (was set)",
-							i, s.slot);
-					frtd.drawFocusShadows = false;
-				}
-			}
 			std::uint32_t idx = 0;  // verified-recipe arg (see comment above)
-			if (diagLights) {
-				auto& drtd = s.light->GetRuntimeData();
-				SKSE::log::info("[SLF] fix45 pre-render #{} slot={} dyn={} acc={} geom={} nd={} idx0={} focus={}",
-					i, s.slot, s.light->dynamic ? 1 : 0,
-					static_cast<std::uint32_t>(drtd.sceneAccumArray.size()),
-					static_cast<std::uint32_t>(s.light->geomList.size()),
-					static_cast<std::uint32_t>(drtd.shadowmapDescriptors.size()),
-					drtd.shadowmapDescriptors.empty() ? -1 :
-						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex),
-					drtd.drawFocusShadows ? 1 : 0);
-			}
-			// fix59: the fix56 warmup skip and fix55 pre-render bare
-			// accumulate blocks were REMOVED here - both addressed sun
-			// states that fix58 eliminated (armed double-accumulate) and
-			// fix46's proven shape needs neither (sun accumulated exactly
-			// once by func(), dispatch just draws). s_sunWarmup stays 0.
-			// fix60: Render under SEH. An AV inside the engine Render
-			// (corrupted pointer after a gate outage - see the 13:09 WER
-			// dump analysis above) is caught and this light is skipped for
-			// the frame instead of taking the process down. The pin
-			// announcement is cleared so the next light starts clean.
-			if (!SafeLightRender(s.light, idx, s.slot, i)) {
-				s_renderingLight.store(nullptr, std::memory_order_relaxed);
-				s_renderingSlot.store(0xFFFFFFFFu, std::memory_order_relaxed);
-				continue;
-			}
-			if (diagLights)
-				SKSE::log::info("[SLF] fix45 post-render #{} slot={} ok", i, s.slot);
+			s.light->Render(idx);   // engine virtual: draws this light's shadows
 			// fix19b: snapshot the descriptor slice Render left behind. The
 			// re-pin loop below overwrites it, so THIS is the only moment the
 			// engine's own write is observable. postIdx != s.slot means Render
@@ -2563,7 +2335,7 @@ namespace ShadowLimitFixNS::P1
 
 	// ---------------------------------------------------------------------
 	// P1b: extended depth-buffer arrays + helpers (real implementation,
-	// cross-verified against an upstream shadow-engine hooks reference). Non-static: shared with
+	// ported from CS ShadowEngineHooks.cpp). Non-static: shared with
 	// ShaderReplace.cpp (IsShadowPass must match DSVs beyond slot 7).
 	// ---------------------------------------------------------------------
 	std::array<void*, 128> g_normalDepthBuffer{};

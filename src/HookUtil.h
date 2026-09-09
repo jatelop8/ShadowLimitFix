@@ -1,14 +1,6 @@
 // HookUtil.h - standalone hook helpers for ShadowLimitFix
-//
-// ATTRIBUTION (original names preserved, see THIRD_PARTY.md):
-//   - detour_thunk trampoline pattern: based on Microsoft Detours (MIT),
-//     reference form as used by Community Shaders / Open Shaders
-//     (github.com/alandtse/open-shaders, GPL-3.0 WITH Modding Exception).
-//   - install_context_hook machinery: CommonLibSSE-NG Community-Shaders fork
-//     (CharmedBaryon/CommonLibSSE-NG; alandtse fork), GPL-3.0-or-later WITH
-//     Modding Exception.
-// This plugin is standalone: REL-ID/engine-behavior comments are facts used
-// for verification only, with no runtime dependency on any other mod.
+// detour_thunk pattern ported from Community Shaders include/PCH.h
+// (based on Microsoft Detours - vcpkg detours.lib).
 // install_context_hook comes from the CommonLibSSE-NG CS fork
 // (SKSE/ContextHook.h, requires SKSE_SUPPORT_XBYAK + vcpkg xbyak).
 #pragma once
@@ -149,29 +141,6 @@ namespace ShadowLimitFixNS::P1
 	inline std::array<ScheduledShadowLight, 128> g_scheduledShadowLights{};
 	inline std::atomic<std::uint32_t> g_scheduledShadowCount{ 0 };
 
-	// fix45 (2026-09-08): post-resume dispatch grace counter (ticks).
-	// The world-switch gate cooldown ending re-enables the scheduler's
-	// register/extend writes AND the manual dispatch in the same frame.
-	// The first post-resume dispatch froze inside a single shadow pass
-	// (23:46 session: last OMSet->shadow 23:45:49.441, then OMSet stopped
-	// advancing while shadow draws raced ~60k/s for 20+s - a Render on a
-	// half-settled light, main image never produced = "freeze"). The
-	// dispatch hook parks itself while this is >0 (scheduler still learns
-	// the engine accumulator each frame); Scheduler.cpp arms it at resume.
-	inline std::atomic<std::uint32_t> g_resumeGrace{ 0 };
-
-	// fix46 (2026-09-08): true while the world-switch gate is frozen
-	// (load UI open / cooldown). The scheduler's fill side is gated by
-	// WorldSwitching(), but the manual dispatch (Hook_RenderShadowLights)
-	// is NOT - on a cell transition WITHOUT a load menu (outdoor cell
-	// boundary walk / teleport / camera jump) the scheduled list can still
-	// hold the PREVIOUS frame's 21 lights whose engine objects the cell
-	// unload just released -> dispatch Render on freed light -> clean exit,
-	// no WER/CrashLogger dump (00:04:14 session, camera-jump gate fired
-	// 00:04:14.218, died within ~1s). The dispatch hook parks itself while
-	// this is true; the gate also zeroes the count the moment it freezes.
-	inline std::atomic<bool> g_shadowWritesFrozen{ false };
-
 	// ---- Post-light pass CPU data (SLF_POSTLIGHT_ENABLED) ----
 	// Filled by the scheduler right after PublishShadowLightDataChannel:
 	// one entry per EXTENDED light (scheduled index >= this frame's engine
@@ -201,7 +170,6 @@ namespace ShadowLimitFixNS::P1
 
 	void RunPostLightPass(::ID3D11DeviceContext* a_ctx);  // ShaderReplace.cpp
 	void ForceLampDimmersOne();  // Scheduler.cpp - restore lodDimmer=1 on all active lamps (fix38/39)
-	void SunBareAccumulateRealSlot();  // Scheduler.cpp - fix55: bare engine Accumulate to the REAL global accum slot right before dispatch renders the sun (CS SetupSunLight alignment; no armed caster-collection flags)
 }
 
 // P1c-3 shader replacement pipeline gate.
@@ -211,7 +179,7 @@ namespace ShadowLimitFixNS::P1
 // it renders BLACK (verified 02:50). This plugin is INDEPENDENT - no CS, ENB
 // only. Any future shader work must use engine-semantics shaders written
 // from scratch, NOT CS sources. Engine-side 8-light rendering stays on.
-// (2026-09-08: all P1C3 blocks removed from the build; no consumer remains.)
+#define P1C3_ENABLED 0
 
 // SLF_B2B_ENABLED - the SLF-B consumer-side bytecode patch engine
 // (SlfBytecodePatch.h splices a per-light shadow payload into engine
@@ -272,7 +240,7 @@ namespace ShadowLimitFixNS::P1
 // the global schedule-order LightRec. NOT blind-fixed here (B4e lesson).
 // This build = B2B OFF (engine bytecode pristine = normal picture) so the
 // user can play while the corrected view-space match probe collects data.
-// (2026-09-08: all SLF_B2B_ENABLED blocks removed from the build.)
+#define SLF_B2B_ENABLED 0
 
 // SLF_PS_ENABLED - our OWN engine-semantics Lighting PS replacement
 // (Shaders/Lighting_SLF.hlsl, re-implemented from the vanilla bytecode
@@ -312,10 +280,10 @@ namespace ShadowLimitFixNS::P1
 // that replaces the engine PS shows material degradation until it is 100%
 // faithful, which is a multi-month port (CS maintains theirs for years).
 // Killed until a route that preserves engine material bytes exactly
-// (e.g. compile-time source/bytecode injection, not
+// (e.g. compile-time source/bytecode injection like Light Limit Fix, not
 // runtime PS swap) is chosen. Render loop + data channel stay on (fix15
 // PublishShadowLightDataChannel is inert without the PS consumer).
-// (2026-09-08: all SLF_PS_ENABLED blocks removed from the build.)
+#define SLF_PS_ENABLED 0
 
 // P1b compile gate - shared across translation units.
 // Set to 1 to build the P1b extended-buffer engine modifications in.
@@ -377,7 +345,7 @@ namespace ShadowLimitFixNS::P1
 #define ENABLE_P1B 1
 
 // Skip the vanilla shadow-light render dispatch at the render-loop call
-// site (Hook_RenderShadowLights sets ctx.Rax=0). This recipe was cross-verified upstream,
+// site (Hook_RenderShadowLights sets ctx.Rax=0). This was ported from CS,
 // where it is ONLY valid because CS fully owns scheduling + rendering.
 // v10-phase1: 1 - the engine scheduler still runs (func() inside the
 // thunk) but the DISPATCH is ours (SLF_MANUAL_RENDER=1) - the exact CS
@@ -421,7 +389,7 @@ namespace ShadowLimitFixNS::P1
 // verified 14:03). When set, the hook additionally drives each scheduled
 // light's engine BSShadowLight::Render (vtable 0A) itself - the same
 // per-light render the vanilla dispatch performed (pattern confirmed in
-// the engine's own call graph; other lighting mods replace that same call site and
+// the engine's own call graph; CS/LLF replaces that same call site and
 // calls Light->Render manually). Set 0 to revert to skip-only.
 //
 // v8-exp2 (2026-09-03): forced 0. With SLF_SKIP_VANILLA_DISPATCH=0 the
@@ -527,7 +495,7 @@ namespace ShadowLimitFixNS::P1
 // hand-written PS always regresses materials): the engine physically
 // consumes only 4 shadow lights/frame (t14 = screen-space 4-channel mask,
 // cb2 slots <= 7 diffuse with <= 4 shadowed, PS variants cannot express
-// more). even full lighting-overhaul mods do NOT unlock this ("the shadow limit
+// more). CS Light Limit Fix does NOT unlock this either ("the shadow limit
 // is not yet unlocked" - its extra lights are shadowless diffuse via a
 // clustered shader REPLACEMENT).
 //
@@ -563,7 +531,7 @@ namespace ShadowLimitFixNS::P1
 // competition). Post pass no longer needed for that state - disable it
 // (also removes its full-screen copy from the frame, the suspected
 // tear-line amplifier). Redline issue parked.
-// (2026-09-08: all SLF_POSTLIGHT_ENABLED blocks removed from the build.)
+#define SLF_POSTLIGHT_ENABLED 0
 
 // fix28 (2026-09-07): user directive - real shadow projection is NOT the
 // goal; the goal is "any number of lights in one space, stable, no crash".
@@ -582,15 +550,7 @@ namespace ShadowLimitFixNS::P1
 // in shadowLightsAccum (frame-to-frame inheritance: as long as a pinned
 // light is still engine-ready this frame it stays - walking inside a room
 // never swaps the 4 -> no flicker; only a real scene change swaps them).
-// fix41 (2026-09-08): DISABLED - proven ineffective in-game (candidates
-// sparse: engine only ever had 1 shadow light in the test room, so nothing
-// to pin; "忽亮忽灭" continued) AND the per-frame clear+push of the
-// engine's shadowLightsAccum is a crash contributor: next frame the engine
-// scheduler (func) runs on OUR rebuilt list whose entries lack engine
-// internal state -> dispatch hits empty vtable slots
-// (crash 2026-09-08-22-01-10: SkyrimSE+14CD743 call [rax+0x30] during a
-// fast-travel load, the same dispatch region as the SLF-era 14CC19E crash).
-#define SLF_PIN_FIXED_LIGHTS 0
+#define SLF_PIN_FIXED_LIGHTS 4
 
 // fix34 (2026-09-07): "lamp lights up only when you walk close" root cause
 // = the engine's per-frame LIGHT LOD FADE: lamps farther than the interior

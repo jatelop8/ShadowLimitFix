@@ -1,9 +1,6 @@
 // ShadowLimitFix.cpp - P0: engine hook target address verification
-//
-// ATTRIBUTION (original names preserved, see THIRD_PARTY.md): Address
-// Library IDs cross-verified against Community Shaders / Open Shaders
-// (alandtse/open-shaders) src/Features/LightLimitFix/ShadowEngineHooks.cpp
-// (GPL-3.0 WITH Modding Exception). REL-ID facts; no runtime dependency.
+// Core hook targets (Address Library IDs verified from Community Shaders
+// src/Features/LightLimitFix/ShadowEngineHooks.cpp):
 //   CalculateActiveShadowCasters       (100419, 107137) - scene shadow light scheduler
 //   CalculateActiveNonShadowCasterLights (100997, 107784) - per-surface light selection
 #include <RE/Skyrim.h>
