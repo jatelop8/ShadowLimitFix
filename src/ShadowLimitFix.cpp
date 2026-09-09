@@ -88,7 +88,26 @@ namespace ShadowLimitFixNS
 			// the sun fine under its full engine-facing expansion. 30
 			// slices still covers every scheduled light (21-24) while
 			// staying inside the envelope the engine adapts to.
-			P1::InstallExtendedBuffers(30);
+			//
+			// fix73 (2026-09-09 23:4x): DISABLED - bisect verdict target.
+			// crash-2026-09-09-23-29-05 (outdoors, Riverwood, fix72 md5
+			// 696fe978, uptime 109s): AV executing HEAP (RIP=0x1287A87700,
+			// 5.6MB past the R14 sign mesh) inside the engine lighting-pass
+			// machinery (BSBatchRenderer_SetupAndDrawPass region uid
+			// 107639-107644, EngineFixes hook on the stack) - the fix64
+			// step2 "corrupted pointer" crash class REAPPEARING at count=30.
+			// Same-run evidence: the ENGINE already renders the sun itself
+			// every frame (64 shadow renders / 64 frames, engine slot
+			// counter=2 = sun idx0/idx1) while SLF's own dispatch renders 0
+			// of 1 scheduled lights - the 30-slice array + SelectDSB/DSV
+			// redirect carries pure crash risk and ZERO current shadow
+			// output. fix73 = engine-native kSHADOWMAPS (8 slices, no
+			// SelectDSB redirect); scheduler/dimmer/indoor publish logic
+			// unchanged. Bisect: outdoor crash gone => array/redirect was
+			// the killer (extended lights then need the FULL CS-style
+			// engine-state expansion, not just the texture); crash stays
+			// => next isolate = InstallScheduler.
+			// P1::InstallExtendedBuffers(30);
 			// v10-phase1 (2026-09-03): scheduler restored - thunk runs the
 			// ORIGINAL engine scheduler (func) then a register pass that
 			// publishes the engine's shadowLightsAccum into our
