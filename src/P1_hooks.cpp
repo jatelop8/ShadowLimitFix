@@ -2053,47 +2053,49 @@ namespace ShadowLimitFixNS::P1
 			// Healthier lights (sceneAccum > 0) are unaffected. Log the
 			// skips so a stall (every light skipped on every frame) is
 			// visible in the log instead of a silent freeze.
-			// fix50 (2026-09-09): the SUN is NEVER rendered through this
-			// list. fix48 exempted it from the sceneAccum skip and rendered
-			// it here, which froze INSIDE engine Render on the first
-			// post-grace dispatch both times it shipped (01:46:21 + 01:59:36
-			// sessions: fix45 pre-render #0 printed, post-render #0 never -
-			// the sun's sceneAccumArray is never filled by any accumulate
-			// we run, and BSShadowLight::Render on an empty-accum
-			// directional light walks the same stall path fix47 skipped
-			// around for point lights; fix49's drawFocusShadows scrub
-			// (focus=0 confirmed in the 01:59 pre-render line) did not
-			// help). The engine has its OWN later-frame sun path that we do
-			// NOT replace (ScheduleShadowCasters dead-code notes 194-208;
-			// D3D trace 14:03 showed clears+draws on the shadow array while
-			// the sun was not in our list = that path is alive and running
-			// empty). Scheduler.cpp fix48 still accumulates the sun's
-			// casters with the armed walk (geomList 2157-2182, verified
-			// 01:59) so the engine-owned sun path has geometry to draw.
-			if (s.light->GetIsDirectionalLight()) {
-				continue;  // sun: engine's own later-frame path renders it
-			}
+			// fix51 (2026-09-09): render EVERY scheduled light whose shadow
+			// camera is actually PLACED - the sun included. fix50's blanket
+			// sun-skip was wrong: the engine's "own later-frame sun path"
+			// is NOT alive under our rax=0 dispatch (the D3D trace 14:03
+			// clears+draws were the pre-fix47 dispatch's own work), so with
+			// the sun parked and every point light skipped by fix47 the
+			// 10:27 session rendered ZERO lights ([POST] rendered 0 lights
+			// every frame, outdoor n=1 sun-only list + indoor sceneAccum=0
+			// point lights) -> no shadow producer at all -> sun shadow gone
+			// (user: "太阳没出来"). The fix47 freeze guard keyed on
+			// sceneAccumArray==0 was ALSO wrong: the armed accumulate
+			// (SetCurrentCullLight + heal-attach) fills geomList, never
+			// sceneAccumArray, so sceneAccum==0 is the NORM for every
+			// healthy light (v10-phase1 rendered 4/4 indoor lights fine,
+			// fix19o 24/24) - fix47 skipped them all. The real
+			// render-blocking state (01:20:40 freeze: fix45 post-render #0
+			// never returned, draws raced ~800k/s) is an UNPLACED shadow
+			// camera - descriptor[0].camera still carrying the engine's
+			// default unit-box frustum (camDflt=1) or absent. Gate on that
+			// instead: camDflt==1 -> skip until engine UpdateCamera places
+			// it; camDflt==0 (sun included - outdoor census 10:27 shows
+			// sun camDflt=0 with a real ortho box) -> render.
 			{
-				auto& rtd47 = s.light->GetRuntimeData();
-				const std::uint32_t acc47 = static_cast<std::uint32_t>(rtd47.sceneAccumArray.size());
-				// fix47 (2026-09-09): skip point lights whose engine accum
-				// list is empty - the shadow camera was not yet placed /
-				// every caster was culled during Accumulate (sceneAccum=0)
-				// and engine Render then NEVER returned (fix45 post-render
-				// #0 missing, shadow-array Draws raced ~800k/s on slice 0
-				// for 19 s, OMSet frozen - hard freeze 01:20:40). A light
-				// with an empty accum list rasterizes zero pixels anyway,
-				// so skip it until the engine settles - the list fills on
-				// a later frame once the camera/frustum is live.
-				if (acc47 == 0) {
-					static std::uint32_t s_skip47 = 0;
-					if (diagLights || (s_skip47++ & 0x3Fu) == 0) {
-						SKSE::log::info("[SLF] fix47 skip light#{} slot={} sceneAccum=0 geom={} nd={} idx0={} (accum empty - camera not settled)",
-							i, s.slot,
+				auto& rtd51 = s.light->GetRuntimeData();
+				const bool noDesc = rtd51.shadowmapDescriptors.empty() ||
+					!rtd51.shadowmapDescriptors[0].camera;
+				bool camDflt51 = true;
+				if (!noDesc) {
+					const auto& fr51 = rtd51.shadowmapDescriptors[0].camera->GetRuntimeData2().viewFrustum;
+					camDflt51 = fr51.fLeft == -1.0f && fr51.fRight == 1.0f &&
+						fr51.fTop == 1.0f && fr51.fBottom == -1.0f &&
+						fr51.fNear == 0.1f && fr51.fFar == 1.0f;
+				}
+				if (noDesc || camDflt51) {
+					static std::uint32_t s_skip51 = 0;
+					if (diagLights || (s_skip51++ & 0x3Fu) == 0) {
+						SKSE::log::info("[SLF] fix51 skip light#{} slot={} {} camDflt={} geom={} nd={} idx0={} (shadow camera not placed)",
+							i, s.slot, s.light->GetIsDirectionalLight() ? "dir" : "point",
+							noDesc ? -1 : (camDflt51 ? 1 : 0),
 							static_cast<std::uint32_t>(s.light->geomList.size()),
-							static_cast<std::uint32_t>(rtd47.shadowmapDescriptors.size()),
-							rtd47.shadowmapDescriptors.empty() ? -1 :
-								static_cast<int32_t>(rtd47.shadowmapDescriptors[0].shadowmapIndex));
+							static_cast<std::uint32_t>(rtd51.shadowmapDescriptors.size()),
+							rtd51.shadowmapDescriptors.empty() ? -1 :
+								static_cast<int32_t>(rtd51.shadowmapDescriptors[0].shadowmapIndex));
 					}
 					continue;
 				}

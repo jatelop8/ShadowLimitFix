@@ -1979,8 +1979,17 @@ namespace ShadowLimitFixNS::P1
 					// ~96 ticks so the engine's own frames settle it first.
 					// fix46: hand the freeze flag to the resume grace (it
 					// keeps the dispatch parked while the scheduler learns).
+					// fix51 (2026-09-09): 96 -> 240. The 01:46:21 and
+					// 01:59:36 freezes (sun render after a weather/time gate)
+					// both occurred on the FIRST dispatch after a 96-tick
+					// grace - the engine's shadow-camera/sun state needed
+					// longer to settle after the cooldown. 240 ticks (~4 s
+					// at 60 fps) keeps the dispatch parked through the
+					// settle window; the fix51 camDflt gate in the dispatch
+					// loop additionally skips any light whose camera is
+					// still the default unit box.
 					ShadowLimitFixNS::P1::g_shadowWritesFrozen.store(false, std::memory_order_release);
-					ShadowLimitFixNS::P1::g_resumeGrace.store(96, std::memory_order_release);
+					ShadowLimitFixNS::P1::g_resumeGrace.store(240, std::memory_order_release);
 				} else if ((s_log++ & 0x3Fu) == 0) {
 					SKSE::log::info("[SLF] world-switch gate: cooldown {} ticks left, writes frozen", s_cooldown);
 				}
