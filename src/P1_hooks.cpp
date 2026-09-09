@@ -2773,63 +2773,57 @@ namespace ShadowLimitFixNS::P1
 				sun = ssn->GetRuntimeData().cloudLight;
 		}
 
-		// ---- batch construction (B4c semantics) ----
-		// Vanilla ALWAYS occupies lights[0] (sun/cloud pointer, possibly
-		// null) and returns >= 1; callers consume lights[0] unconditionally.
-		// To keep batch[i] == scheduled[i] (t102[i] is published from
-		// scheduled[i], and the payload samples t102 at the ENGINE LOOP
-		// INDEX), the batch is the CONSECUTIVE PREFIX of
-		// g_scheduledShadowLights - scheduled[0] IS the sun when the engine
-		// accumulated it (slot 0 = sun when active), so prefixing verbatim
-		// satisfies both the alignment and the vanilla lights[0]=sun shape.
-		//
-		// Fallback (menu/load frames, scheduler not yet publishing): read
-		// the engine's own shadowLightsAccum (the vanilla data source for
-		// this function) and, if even that is empty, write lights[0] = sun
-		// so the return is never 0 and lights[0] is never garbage - the
-		// exact crash B4c first shipped with (scheduled=0 -> empty batch ->
-		// SkyrimSE+14DD5B7 AV, rax=0).
-		//
-		// Diffuse-only lights are then appended from lightData->lights
-		// exactly like vanilla/CS Step3 (skip frustrumCull==0xFF parabolic
-		// markers and hidden NiLights). They do NOT run the shadow payload:
-		// the engine's material loop only shadow-tests lights that carry a
-		// shadow channel, and diffuse entries get none.
-		int added = 0;
-		int nShadow = 0;
+		// ---- batch construction (B4c semantics, fix63 CS-aligned) ----
+		// Vanilla ALWAYS occupies lights[0] with the sun/cloud source and
+		// returns >= 1. fix63 part 2 (2026-09-09): CS fills lights[0] with
+		// the RESOLVED sun source unconditionally (ShadowEngineHooks.cpp:
+		// "lights[0] = sunLight" 761) and counts *shadowCount from ZERO -
+		// the sun is a directional light handled on its own engine path,
+		// never a shadow-array light. SLF's pre-fix63 batch instead copied
+		// the scheduled prefix verbatim with nShadow INCLUDING the sun;
+		// the material pass then shadow-tested the sun like a point light
+		// against the extended shadow array and produced an empty cb2
+		// (log: "lightCount=1 scheduled=1" vs "cb2 per-surface: lights=0").
+		// To keep batch[i] == scheduled[i] for the SLF-B payload (t102[i]
+		// samples at the ENGINE LOOP INDEX), the shadow lights start at
+		// lights[1] = scheduled[1] (scheduled[0] IS the sun when active,
+		// matching lights[0] = sun). Diffuse lights append after (CS
+		// Step3, skip the sun + duplicate check).
+		*shadowCount = 0;
+		lights[0] = sun;  // resolved sun source; may be null (vanilla writes it regardless)
+		int added = 1;
 		const std::uint32_t nSch = g_scheduledShadowCount.load(std::memory_order_acquire);
 		auto* ssn = ssnPtr ? static_cast<RE::ShadowSceneNode*>(ssnPtr) : nullptr;
 
-		if (nSch > 0 && addShadow) {
-			int cap = std::min<int>(maxCount, static_cast<int>(nSch));
-			for (int j = 0; j < cap; j++) {
-				auto* sl = g_scheduledShadowLights[j].light;  // BSShadowLight*
-				if (!sl)
-					break;  // null hole: keep prefix contiguous (never skip)
-				lights[added++] = sl;
-				nShadow++;
+		if (addShadow) {
+			if (nSch > 0) {
+				int cap = std::min<int>(maxCount, static_cast<int>(nSch));
+				for (int j = 0; j < cap && added < maxCount; j++) {
+					auto* sl = g_scheduledShadowLights[j].light;  // BSShadowLight*
+					if (!sl)
+						break;  // null hole: keep prefix contiguous (never skip)
+					if (reinterpret_cast<RE::BSLight*>(sl) == sun)
+						continue;  // sun already occupies lights[0]
+					lights[added++] = sl;
+					(*shadowCount)++;
+				}
+			} else if (ssn) {
+				// Scheduler idle (menu/load/first frame): vanilla data source.
+				// The engine fills shadowLightsAccum (slot 0 = sun when active)
+				// before material passes run, so mirroring it keeps the batch
+				// exact even before our scheduler publishes.
+				auto& accum = ssn->GetRuntimeData().shadowLightsAccum;
+				for (const auto* sl : accum) {
+					if (!sl || added >= maxCount)
+						break;
+					if (reinterpret_cast<RE::BSLight*>(const_cast<RE::BSShadowLight*>(sl)) == sun)
+						continue;
+					if (added >= 8)
+						break;  // cb2 per-surface ceiling
+					lights[added++] = const_cast<RE::BSShadowLight*>(sl);
+					(*shadowCount)++;
+				}
 			}
-		} else if (nSch == 0 && addShadow && ssn) {
-			// Scheduler idle (menu/load/first frame): vanilla data source.
-			// The engine fills shadowLightsAccum (slot 0 = sun when active)
-			// before material passes run, so mirroring it keeps the batch
-			// exact even before our scheduler publishes.
-			auto& accum = ssn->GetRuntimeData().shadowLightsAccum;
-			for (const auto* sl : accum) {
-				if (!sl || added >= maxCount)
-					break;
-				if (added >= 7)
-					break;  // cb2 per-surface ceiling
-				lights[added++] = const_cast<RE::BSShadowLight*>(sl);
-				nShadow++;
-			}
-		}
-		if (added == 0) {
-			// Nothing scheduled and no engine accum (or addShadow==false):
-			// vanilla fallback shape. shadowCount stays 0 -> the engine
-			// treats this surface as diffuse-only, matching vanilla.
-			lights[0] = sun;  // may be null (vanilla writes it regardless)
-			added = 1;
 		}
 
 		// Diffuse-only lights (vanilla tail loop 0x14fd130 / CS Step3).
@@ -2854,8 +2848,9 @@ namespace ShadowLimitFixNS::P1
 			}
 		}
 
-		if (shadowCount)
-			*shadowCount = nShadow;
+		// *shadowCount was written directly during construction (fix63:
+		// counts shadow point lights only, never the sun). added >= 1
+		// always (lights[0] = sun source, possibly null) - vanilla shape.
 		ctx.Rax = static_cast<std::uint64_t>(added);
 
 		// Per-surface batch diagnostics (every 1024th call). The first batch
