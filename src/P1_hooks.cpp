@@ -2063,7 +2063,9 @@ namespace ShadowLimitFixNS::P1
 	//
 	// Returns: 0 = rendered OK, 1 = no directional in scheduled set,
 	//          2 = camera not placed (engine not maintaining the sun yet),
-	//          3 = AV caught.
+	//          3 = AV caught,
+	//          4 = caster set empty -> skipped (fix80; empty-set Render spins,
+	//              see below - do NOT render blind).
 	//
 	// fix71 (2026-09-09, 22:5x): fix70's first REAL sun render froze the
 	// whole game outdoors right after a world-switch resume (22:53:33
@@ -2150,24 +2152,31 @@ namespace ShadowLimitFixNS::P1
 								static_cast<std::uint32_t>(rtd.shadowmapDescriptors.size()), smc);
 					}
 				}
-				// fix79 (2026-09-10): caster-empty NO LONGER skips the sun
-				// render. fix72/77/78 (9 rounds) measured sceneAccum=0
-				// geom=0 every frame and skipped -> sun->Render never ran
-				// once since fix71 fixed the DSV context (0 "Render begin"
-				// lines in any log). Point lights render fine with a live
-				// descriptor + empty sceneAccum (engine Render self-culls),
-				// so the caster-empty gate here was over-defensive: fix70's
-				// freeze was the missing SelectDSB context (fixed by fix71),
-				// NOT empty casters. Let the sun render through the same
-				// verified context as a point light (descriptor pin +
-				// s_renderingLight/s_renderingSlot publish + SEH + 3-strike
-				// AV disable). Log the first empty-caster renders for trace.
+				// fix80 (2026-09-10): caster-empty SKIPS the sun render.
+				// fix79 (rendering-anyway) froze the game at 01:02:19:
+				// "Render begin #1" logged, "Render end" never came - the
+				// main render thread (41616) stopped emitting for 30+s
+				// while the SLF-QA readback thread (47684) kept sampling
+				// live frames every 2s (hi=0.820 still visible at t=2.0s,
+				// then black) => GPU/D3D queue alive, sun->Render SPINS on
+				// the CPU before reaching its first D3D call. That is
+				// exactly the fix72 prophecy ("the directional Render would
+				// rasterize against a half-built caster set and spin").
+				// fix79's point-light analogy was wrong: point lights render
+				// fine with an empty sceneAccum, but the sun's cascade
+				// render path depends on a completed caster set. Skip with a
+				// distinct code so the dispatch log separates this from
+				// cam-not-placed (2). Sun rendering stays parked (code=4)
+				// until the real fix (full 107137 scheduler takeover so the
+				// engine's CalculateActiveShadowCasters actually fills the
+				// set before the sun renders).
 				if (rtd.sceneAccumArray.empty() && s.light->geomList.empty()) {
-					static std::uint32_t s_sunEmptyLog = 0;
-					if ((s_sunEmptyLog++ & 0x1Fu) == 0)
-						SKSE::log::info("[SLF] fix79 sun: caster empty (acc={} geom={}) - rendering anyway (fix71 DSV ctx)",
+					static std::uint32_t s_sunEmptySkip = 0;
+					if ((s_sunEmptySkip++ & 0x3Fu) == 0)
+						SKSE::log::info("[SLF] fix80 sun: caster empty (acc={} geom={}) - SKIPPING sun render (spin evidence, fix79 01:02:19 freeze)",
 							static_cast<std::uint32_t>(rtd.sceneAccumArray.size()),
 							static_cast<std::uint32_t>(s.light->geomList.size()));
+					return 4;
 				}
 				// Publish the render context exactly like the point-light
 				// loop does, so SelectDepthBuffer1/2 force the canvas to the
@@ -2343,7 +2352,7 @@ namespace ShadowLimitFixNS::P1
 						SKSE::log::error("[SLF] fix70 sun Render AV #{} (caught by SEH) - sun render still attempted next frame", s_sunAv);
 					}
 				} else if (logNow) {
-					SKSE::log::info("[SLF] fix70 sun skip code={} (1=no-dir 2=cam-not-placed 3=AV)", sunCode);
+					SKSE::log::info("[SLF] fix70 sun skip code={} (1=no-dir 2=cam-not-placed 3=AV 4=caster-empty-spin)", sunCode);
 				}
 			}
 		}
