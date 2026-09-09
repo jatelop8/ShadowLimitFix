@@ -2087,43 +2087,29 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
-			// fix57 (2026-09-09): the sun does NOT render through this
-			// manual dispatch. Seven consecutive sun-render hangs
-			// (01:46/01:59/11:04:59/11:41:10/12:04:45/12:16:43/12:32:10)
-			// all died on Render(sun) inside this loop. fix56's 32-frame
-			// warmup PROVED the outage-context theory wrong: 12:32:10.2-
-			// 10.8 ran 32 clean warmup frames at ~53 fps (game alive,
-			// point-light shadow draws healthy), then frame 33
-			// Render(sun) hung instantly (last log row 12:32:10.800
-			// "fix55 sun pre-render bare real-slot accumulate", no
-			// SelectDSB row, no post-render). fix54/55 already proved the
-			// accumulate shape is irrelevant (armed AND bare accumulate
-			// both leave sceneAccum=0). fix46 and earlier rendered the sun
-			// FINE because it was NOT in this list - "dir (sun) skipped:
-			// not in this list" appears three times in the fix46-era
-			// dispatch (P1_hooks.cpp), and the 00:50 session under the
-			// SAME rax=0 + manual-dispatch architecture rendered point
-			// lights while the sun stayed healthy: the engine renders the
-			// directional cascade itself and that path survives our
-			// rax=0 stop. fix48 (01:38) dragged the sun into this list to
-			// paper over fix47's sceneAccum==0 skip bug - wrong tool:
-			// fix51 already fixed the real bug with the camDflt gate.
-			// fix59 (2026-09-09): SUPERSEDES fix57's sun skip. The sun IS
-			// rendered through this dispatch - but as a pure DRAW, with
-			// every SLF-side sun mechanism stripped. fix57 skipped it to
-			// hand it to "the engine's own cascade" - wrong: the engine's
-			// shadow draw lives in the dispatch chain our rax=0 stops
-			// (12:48 session: dispatch parked, NO sun shadow), so the sun
-			// draw must be triggered here, exactly as CS renders Light[0]=
-			// sun under its identical rax=0. The corruption that made
-			// Render(sun) hang seven times (fix48-fix56) was fix48's armed
-			// SECOND same-frame accumulate on top of func()'s own - fix58
-			// removed that (sun is now published-only, accumulated exactly
-			// once by func()). This dispatch is back to the fix46 shape
-			// that rendered slot0 fine: no armed walk, no pre-render
-			// accumulate, no warmup - just Render(idx), same as point
-			// lights. fix51's camDflt gate below is the render-safety
-			// fence, fix49's focus scrub runs for every light.
+			// fix61 (2026-09-09, USER DECISION): the sun does NOT render
+			// through this dispatch. This is the final resolution of the
+			// fix48-fix60 sun saga: the 13:09 WER dump (CrashDumps/
+			// SkyrimSE.exe.38632.dmp) proved Render(sun) here is a
+			// STRUCTURAL engine AV - faulting RIP executed at 0x11B8AD7400,
+			// OUTSIDE every loaded module (call through a corrupted
+			// pointer) reading addr 0x8 - and the 13:59 session showed it
+			// AVs EVERY frame from the session's first Render(sun), gate or
+			// no gate, geom 0 or 2016, armed or bare accumulate, warmup or
+			// not (fix54/55/56/58/59 all tried). The engine's directional
+			// cascade render is incompatible with SLF's shadow-array
+			// expansion when called from the manual dispatch; fix60's SEH
+			// net caught the AV every frame but the repeated corruption
+			// still froze the process. SLF's purpose is INDOOR extended
+			// point lights (user-confirmed working); the sun stays in the
+			// engine's own domain. fix58's published-only sun (func()
+			// accumulates it, we never touch it) is kept so the engine
+			// sun state stays pristine; this dispatch simply never draws
+			// it. Known limitation: no outdoor sun SHADOW (sun light and
+			// sky are unaffected - they do not depend on the shadow
+			// render). Backlog: engine-owned sun draw channel.
+			if (s.light->GetIsDirectionalLight())
+				continue;
 			// fix47 (2026-09-09): post-resume freeze. The first dispatch
 			// after a world-switch gate (01:20:40 session) rendered lights
 			// whose engine Accumulate produced NO casters that frame
