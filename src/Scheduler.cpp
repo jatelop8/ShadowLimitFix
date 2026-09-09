@@ -1,14 +1,19 @@
 // Scheduler.cpp - P1c-1b: real shadow-caster scheduler (select N, slot them)
 //
-// Replaces CalculateActiveShadowCasters (ID 100419/107137). The engine calls
-// ResetCalculatedShadowCasterLights BEFORE this hook (vanilla flow), which
+// ATTRIBUTION (original names preserved, see THIRD_PARTY.md): engine-state
+// API shapes and scheduler concepts cross-verified against Community Shaders
+// / Open Shaders (alandtse/open-shaders) ShadowEngineHooks.cpp and
+// ShadowCasterClassifier.cpp (GPL-3.0 WITH Modding Exception). Re-implemented
+// here; REL-ID facts only, no runtime dependency.
+//
+// Replaces CalculateActiveShadowCasters (ID 100419/107137). The engine calls// ResetCalculatedShadowCasterLights BEFORE this hook (vanilla flow), which
 // clears slot state and installs the sun - so we only need to:
 //   1. collect active shadow lights
 //   2. sort by distance to the camera
 //   3. slot the top N via GameSetShadowCasterSlot (engine API 99728/106365)
 // The engine render loop then renders N true shadow maps.
 //
-// Engine state APIs ported from CS ShadowEngineHooks.cpp.
+// Engine state API shapes cross-verified against an upstream shadow-engine reference.
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
 
@@ -721,7 +726,7 @@ namespace ShadowLimitFixNS::P1
 
 	// =====================================================================
 	// v10-phase1c (2026-09-03): CS-style AppendVirtual caster-collection
-	// chain - minimal port of open-shaders ShadowCasterClassifier.cpp.
+	// chain - minimal port of an upstream shadow-classifier reference.
 	//
 	// Why it exists: engine scheduler func() accumulates the SUN only
 	// (disasm: the single vtable09 call inside uid107137 sits at 0x14CC5E5,
@@ -1866,81 +1871,132 @@ namespace ShadowLimitFixNS::P1
 		}
 	}
 
-#if SLF_POSTLIGHT_ENABLED
-	// ---------------------------------------------------------------------
-	// fix20 (2026-09-06): post-light pass CPU data - EXTENDED lights only.
-	//
-	// The full-screen consumer pass (ShaderReplace.cpp RunPostLightPass,
-	// fired at first ImageSpace BeginTechnique) re-lights every pixel with
-	// the extended lamps that the engine never put in cb2 (invisible today:
-	// SLF renders their shadow maps into the 127-slice array with no
-	// consumer). Engine-scheduled prefix (g_engineLightCount) is excluded -
-	// the engine already lit those in the forward pass, adding them again
-	// would double-light. Walk the LIVE scheduled list directly (index
-	// >= engine count) instead of the packed g_shadowLights so a mid-list
-	// skip can never shift the engine/extended boundary.
-	static void PostFillExtendedLights()
+
+	// fix41 (2026-09-08): true while the world is loading/switching (fast
+	// travel, cell transition load, main menu). During this window the engine
+	// rebuilds shadow state and SLF must not write engine shadow data.
+	// LoadingMenu covers fast travel / loads; a huge per-frame camera jump
+	// (checked at low rate) catches quick-travel teleports without the menu.
+	// fix42 (2026-09-08): gate with a cooldown tail. fix41 only froze while
+	// the load UI was open; a save/load closes LoadingMenu the instant the
+	// world is placed while cells/NPCs/shadow state are still streaming in,
+	// and SLF resumed full engine-state writes the same frame -> engine
+	// dispatch hit freed objects (SkyrimSE+14F3E4A call [rax+0x10], WER
+	// 0xc0000005, no CrashLogger dump: 22:27/22:31/22:44 sessions, also with
+	// AdvancedSkinFix disabled). Keep ALL SLF writes frozen for ~120
+	// scheduler invocations (~2 s) after the load UI closes or a camera
+	// jump, then resume.
+	// fix44 (2026-09-08): cooldown 120 -> 360 ticks. A heavy save's cell
+	// streaming continues well past LoadingMenu close; the 2 s freeze ended
+	// while cells/NPCs were still spawning and SLF's first resumed writes
+	// (RegisterEngineAccumLights / publish) hit half-built shadow state ->
+	// clean exit, no WER/CrashLogger dump (23:28 session: gate resumed
+	// 23:28:53.387, died 18 ms later). 360 ticks ~6-9 s covers the stream-in.
+	static bool WorldSwitching()
 	{
-		const std::uint32_t eng = ShadowLimitFixNS::P1::g_engineLightCount.load(std::memory_order_acquire);
-		const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
-		std::uint32_t pc = 0;
-		for (std::uint32_t i = eng; i < n && pc < 64; i++) {
-			auto* light = ShadowLimitFixNS::P1::g_scheduledShadowLights[i].light;
-			if (!light || !light->light)
-				continue;
-			auto& rtd = light->GetRuntimeData();
-			const auto& descs = rtd.shadowmapDescriptors;
-			if (descs.empty())
-				continue;
-			auto& pl = ShadowLimitFixNS::P1::g_postLight[pc];
-			pl.pos[0] = light->light->world.translate.x;
-			pl.pos[1] = light->light->world.translate.y;
-			pl.pos[2] = light->light->world.translate.z;
-			pl.radius = light->light->GetLightRuntimeData().radius.x;
-			const auto& lc = light->light->GetLightRuntimeData().diffuse;
-			pl.color[0] = lc.red;
-			pl.color[1] = lc.green;
-			pl.color[2] = lc.blue;
-			pl.intensity = 1.0f;
-			pl.slice = static_cast<float>(descs[0].shadowmapIndex);
-			pl.lightType = (descs.size() >= 2) ? 2.0f : 1.0f;  // omni vs hemi
-			// Step 2 (2026-09-07): carry the shadow-camera transform so the
-			// post-pass can do a REAL shadow test against the t103 slice this
-			// light rendered into. Same construction as the b13 data channel
-			// (PublishShadowLightDataChannel): paraboloid needs the AFFINE
-			// world->light-space matrix only (perspective would corrupt
-			// distance); the paraboloid projection lives in the sample math.
-			const auto& d0 = descs[0];
-			float farF = pl.radius;
-			if (d0.camera) {
-				const float* view = &d0.camera->GetRuntimeData().worldToCam[0][0];
-				for (int k = 0; k < 16; k++)
-					pl.proj[k] = view[k];
-				pl.proj[3] = 0.0f;
-				pl.proj[7] = 0.0f;
-				pl.proj[11] = 0.0f;
-				pl.proj[15] = 1.0f;
-				const auto& fr = d0.camera->GetRuntimeData2().viewFrustum;
-				if (fr.fFar > 1.0f)
-					farF = fr.fFar;
-				pl.flags = 1.0f;
-			} else {
-				for (int k = 0; k < 16; k++)
-					pl.proj[k] = 0.0f;
-				pl.flags = 0.0f;  // no matrix -> no shadow test (diffuse only)
+		enum class Gate : std::uint8_t { kNone, kOpen, kCooldown };
+		static constexpr std::uint32_t kCooldownTicks = 360;
+		static Gate s_gate = Gate::kNone;
+		static std::uint32_t s_cooldown = 0;
+		static std::uint32_t s_log = 0;
+
+		// fix46 (2026-09-08): the moment the gate freezes, the scheduled
+		// dispatch list may still hold THIS frame's lights (filled before
+		// the transition was detected). The cell unload then releases those
+		// engine objects while the manual dispatch (which does NOT consult
+		// WorldSwitching) renders the stale list -> UAF with a clean exit
+		// (00:04:14 session). Zero the list and flag the dispatch hook so
+		// nothing renders a freed light during the freeze.
+		const auto freeze = [] {
+			ShadowLimitFixNS::P1::g_scheduledShadowCount.store(0, std::memory_order_release);
+			ShadowLimitFixNS::P1::g_shadowWritesFrozen.store(true, std::memory_order_release);
+		};
+
+		auto* ui = RE::UI::GetSingleton();
+		if (ui && (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
+					  ui->IsMenuOpen(RE::MainMenu::MENU_NAME))) {
+			// Load UI open: keep frozen (menu may reopen mid-transition).
+			if (s_gate != Gate::kOpen) {
+				s_gate = Gate::kOpen;
+				freeze();
+				if ((s_log++ & 0x1Fu) == 0)
+					SKSE::log::info("[SLF] world-switch gate OPEN (load UI), shadow writes frozen");
 			}
-			pl.farDist = farF;
-			pc++;
+			return true;
 		}
-		ShadowLimitFixNS::P1::g_postLightCount.store(pc, std::memory_order_release);
-		static uint32_t plLog = 0;
-		if ((plLog++ & 0x7Fu) == 0)
-			SKSE::log::info("[SLF] post-light fill: eng={} sched={} ext={}", eng, n, pc);
+		if (s_gate == Gate::kOpen) {
+			// Load UI just closed: world placed but still streaming in.
+			// Do NOT resume this frame - hold a cooldown tail instead.
+			s_gate = Gate::kCooldown;
+			s_cooldown = kCooldownTicks;
+			freeze();
+			SKSE::log::info("[SLF] world-switch gate: load UI closed, shadow writes frozen {} ticks", kCooldownTicks);
+			return true;
+		}
+		// Camera jump check (8 scheduler ticks ~ a few frames, cheap).
+		static RE::NiPoint3 s_lastCam{ 0.f, 0.f, 0.f };
+		static std::uint32_t s_tick = 0;
+		if ((s_tick++ & 0x7u) == 0) {
+			bool jumped = false;
+			if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+				const auto p = pc->GetPosition();
+				const float dx = p.x - s_lastCam.x;
+				const float dy = p.y - s_lastCam.y;
+				const float dz = p.z - s_lastCam.z;
+				const float d2 = dx * dx + dy * dy + dz * dz;
+				if (d2 > 2500.f * 2500.f)  // >2500 units between ticks
+					jumped = true;
+				s_lastCam = p;
+			}
+			if (jumped) {
+				s_gate = Gate::kCooldown;
+				s_cooldown = kCooldownTicks;
+				freeze();
+				SKSE::log::info("[SLF] world-switch gate: camera jump, shadow writes frozen {} ticks", kCooldownTicks);
+				return true;
+			}
+		}
+		if (s_gate == Gate::kCooldown) {
+			if (s_cooldown > 0) {
+				if (--s_cooldown == 0) {
+					s_gate = Gate::kNone;
+					SKSE::log::info("[SLF] world-switch gate: cooldown over, shadow writes resumed");
+					// fix45 (2026-09-08): the FIRST post-resume dispatch
+					// froze inside a single shadow pass (23:46 session:
+					// cooldown over 23:46:04.405 -> 0.4s later OMSet->shadow
+					// stopped advancing while draw counts raced ~60k/s for
+					// 20+s; main image never produced). The scheduler
+					// re-learns the engine accumulator this frame but the
+					// per-light Render state (accum/geom/camera) was just
+					// rebuilt by the load - park the manual dispatch for
+					// ~96 ticks so the engine's own frames settle it first.
+					// fix46: hand the freeze flag to the resume grace (it
+					// keeps the dispatch parked while the scheduler learns).
+					ShadowLimitFixNS::P1::g_shadowWritesFrozen.store(false, std::memory_order_release);
+					ShadowLimitFixNS::P1::g_resumeGrace.store(96, std::memory_order_release);
+				} else if ((s_log++ & 0x3Fu) == 0) {
+					SKSE::log::info("[SLF] world-switch gate: cooldown {} ticks left, writes frozen", s_cooldown);
+				}
+				return true;
+			}
+		}
+		return false;
 	}
-#endif  // SLF_POSTLIGHT_ENABLED
 
 	void Hook_CalculateActiveShadowCasters::thunk()
 	{
+		// fix41 (2026-09-08): fast-travel / world-switch crash guard. During
+		// a load or a huge per-frame camera jump the engine is rebuilding
+		// shadow state; our post-func writes (dimmer/fade traversal, pinned
+		// accumulator rebuild, extended schedules) then race the rebuild and
+		// the engine's next-frame dispatch can hit empty vtable slots
+		// (crash 2026-09-08-22-01-10 SkyrimSE+14CD743 call [rax+0x30]).
+		// While switching we run the engine scheduler untouched and skip ALL
+		// SLF engine-state writes; the normal path resumes next frame.
+		if (WorldSwitching()) {
+			func();
+			return;
+		}
 		// fix23 perf probe (2026-09-06): split per-frame CPU between the
 		// engine's own shadow scheduling (func) and our SLF post work
 		// (register/extend/publish/fill). PPT diagnosis: smooth room A ran
@@ -1987,10 +2043,6 @@ namespace ShadowLimitFixNS::P1
 		// list exists (engine accum + extension). g_shadowLightCount feeds
 		// the fix12 swap gate; g_shadowLights feeds the b13 cbuffer.
 		PublishShadowLightDataChannel();
-#if SLF_POSTLIGHT_ENABLED
-		// fix20: extended-light CPU data for the full-screen consumer pass.
-		PostFillExtendedLights();
-#endif
 		const auto s2 = clk::now();
 		static std::uint64_t s_fNs = 0, s_sNs = 0;
 		static std::uint32_t s_n = 0;

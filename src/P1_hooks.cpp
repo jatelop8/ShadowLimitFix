@@ -1,6 +1,11 @@
 // P1_hooks.cpp - P1: engine hook installation framework
 // NOT yet in CMakeLists.txt - enabled only after P0 passes in-game.
-// All install patterns verified from Community Shaders:
+//
+// ATTRIBUTION (original names preserved, see THIRD_PARTY.md):
+//   Hook targets and install patterns cross-verified against Community
+//   Shaders / Open Shaders (github.com/alandtse/open-shaders, GPL-3.0 WITH
+//   Modding Exception) - ShadowEngineHooks.cpp / LightLimitFix reference.
+//   REL-ID facts; no runtime dependency on any other mod.
 //   src/Features/LightLimitFix/ShadowEngineHooks.cpp
 //
 // Phases:
@@ -1889,13 +1894,13 @@ namespace ShadowLimitFixNS::P1
 	// P1c-2: drive the engine's own per-light shadow render. The vanilla
 	// call this hook replaces was the ONLY producer of kSHADOWMAPS depth;
 	// skipping it (ctx.Rax=0) leaves every slice empty (RL readback = 0%,
-	// verified 14:03). LLF replaces that same call site (100415/107133) and
+	// verified 14:03). an upstream mod replaces that same call site (100415/107133) and
 	// manually calls each scheduled light's BSShadowLight::Render - the
 	// engine's per-light shadow render (vtable 0A in the CommonLib fork,
 	// same vtable walk the vanilla dispatch performed). We replicate it with
 	// OUR scheduler's list.
 	//
-	// Render arg = 0 for every light (the LLF in-game-verified recipe, sun
+	// Render arg = 0 for every light (the upstream in-game-verified recipe, sun
 	// and points alike). The slice a light renders into is NOT selected by
 	// this arg - it comes from the light's descriptor[0].shadowmapIndex
 	// (which our scheduler wrote = slot) via the engine's depth-target
@@ -1918,7 +1923,50 @@ namespace ShadowLimitFixNS::P1
 
 	static void RenderScheduledShadowLightsDispatch()
 	{
+		// fix46 (2026-09-08): the world-switch gate zeroes the scheduled
+		// list the moment it freezes (see Scheduler.cpp freeze()) and this
+		// hook must NOT render anything while the gate is frozen either -
+		// on a no-load-menu cell transition (outdoor boundary walk /
+		// teleport / camera jump) this hook keeps firing every frame while
+		// the scheduler fill side is gated, and a list that was NOT yet
+		// zeroed (or a stale local n from before the freeze) could render a
+		// light the cell unload just released -> clean exit with no dump
+		// (00:04:14 session, died ~1s after the camera-jump gate fired).
+		// The flag is also kept true across the fix45 resume grace (the
+		// scheduler learns the fresh accumulator while we stay parked).
+		if (ShadowLimitFixNS::P1::g_shadowWritesFrozen.load(std::memory_order_acquire)) {
+			static std::uint32_t s_frozenLog = 0;
+			if ((s_frozenLog++ & 0xFFu) == 0)
+				SKSE::log::info("[SLF] fix46 dispatch parked (world-switch gate frozen)");
+			return;
+		}
+
 		const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
+		// fix45 (2026-09-08): resume grace. After a world-switch gate
+		// cooldown ends, the scheduler re-learns the engine accumulator
+		// immediately but the per-light Render state was just rebuilt by
+		// the load; the FIRST post-resume dispatch froze inside one shadow
+		// pass (23:46 session, OMSet stopped at 3490 while draws raced
+		// ~60k/s for 20+s). Park the dispatch while the grace counter is
+		// armed (scheduler still fills the list each frame), then for the
+		// first 16 live frames log every per-light Render so a repeat
+		// freeze pinpoints the exact light.
+		static std::uint32_t s_afterGrace = 0;
+		{
+			const std::uint32_t g = ShadowLimitFixNS::P1::g_resumeGrace.load(std::memory_order_acquire);
+			if (g > 0) {
+				if (g == 96)
+					SKSE::log::info("[SLF] fix45 resume grace: manual dispatch parked {} ticks (load-settled render state)", g);
+				ShadowLimitFixNS::P1::g_resumeGrace.store(g - 1, std::memory_order_release);
+				s_afterGrace = 16;  // diagnostic window once we come back live
+				return;
+			}
+		}
+		const bool diagLights = s_afterGrace > 0;
+		if (diagLights && (--s_afterGrace == 15))
+			SKSE::log::info("[SLF] fix45 grace over - dispatch live, per-light diagnostic for {} frames", 16u);
+		if (diagLights)
+			SKSE::log::info("[SLF] fix45 diag: dispatch n={}", n);
 
 		static std::uint32_t s_dispatchFrame = 0;
 		const bool logNow = (++s_dispatchFrame & 0x3Fu) == 0;
@@ -2014,7 +2062,19 @@ namespace ShadowLimitFixNS::P1
 				s_renderingSlot.store(s.slot, std::memory_order_relaxed);
 			}
 			std::uint32_t idx = 0;  // verified-recipe arg (see comment above)
+			if (diagLights) {
+				auto& drtd = s.light->GetRuntimeData();
+				SKSE::log::info("[SLF] fix45 pre-render #{} slot={} dyn={} acc={} geom={} nd={} idx0={}",
+					i, s.slot, s.light->dynamic ? 1 : 0,
+					static_cast<std::uint32_t>(drtd.sceneAccumArray.size()),
+					static_cast<std::uint32_t>(s.light->geomList.size()),
+					static_cast<std::uint32_t>(drtd.shadowmapDescriptors.size()),
+					drtd.shadowmapDescriptors.empty() ? -1 :
+						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex));
+			}
 			s.light->Render(idx);   // engine virtual: draws this light's shadows
+			if (diagLights)
+				SKSE::log::info("[SLF] fix45 post-render #{} slot={} ok", i, s.slot);
 			// fix19b: snapshot the descriptor slice Render left behind. The
 			// re-pin loop below overwrites it, so THIS is the only moment the
 			// engine's own write is observable. postIdx != s.slot means Render
@@ -2335,7 +2395,7 @@ namespace ShadowLimitFixNS::P1
 
 	// ---------------------------------------------------------------------
 	// P1b: extended depth-buffer arrays + helpers (real implementation,
-	// ported from CS ShadowEngineHooks.cpp). Non-static: shared with
+	// cross-verified against an upstream shadow-engine hooks reference). Non-static: shared with
 	// ShaderReplace.cpp (IsShadowPass must match DSVs beyond slot 7).
 	// ---------------------------------------------------------------------
 	std::array<void*, 128> g_normalDepthBuffer{};

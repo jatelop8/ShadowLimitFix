@@ -23,3 +23,9 @@ test_echo.bat
 .vs/
 .vscode/
 *.user
+
+# Local machine paths / personal presets (repo keeps a portable CMakePresets.json)
+CMakeUserPresets.json
+# Local build driver (VsDevCmd + machine paths) - regenerate/adjust per machine
+build_ninja.bat
+gen_build_ninja.py
