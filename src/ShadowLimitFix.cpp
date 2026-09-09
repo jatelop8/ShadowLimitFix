@@ -88,26 +88,7 @@ namespace ShadowLimitFixNS
 			// the sun fine under its full engine-facing expansion. 30
 			// slices still covers every scheduled light (21-24) while
 			// staying inside the envelope the engine adapts to.
-			//
-			// fix73 (2026-09-09 23:4x): DISABLED - bisect verdict target.
-			// crash-2026-09-09-23-29-05 (outdoors, Riverwood, fix72 md5
-			// 696fe978, uptime 109s): AV executing HEAP (RIP=0x1287A87700,
-			// 5.6MB past the R14 sign mesh) inside the engine lighting-pass
-			// machinery (BSBatchRenderer_SetupAndDrawPass region uid
-			// 107639-107644, EngineFixes hook on the stack) - the fix64
-			// step2 "corrupted pointer" crash class REAPPEARING at count=30.
-			// Same-run evidence: the ENGINE already renders the sun itself
-			// every frame (64 shadow renders / 64 frames, engine slot
-			// counter=2 = sun idx0/idx1) while SLF's own dispatch renders 0
-			// of 1 scheduled lights - the 30-slice array + SelectDSB/DSV
-			// redirect carries pure crash risk and ZERO current shadow
-			// output. fix73 = engine-native kSHADOWMAPS (8 slices, no
-			// SelectDSB redirect); scheduler/dimmer/indoor publish logic
-			// unchanged. Bisect: outdoor crash gone => array/redirect was
-			// the killer (extended lights then need the FULL CS-style
-			// engine-state expansion, not just the texture); crash stays
-			// => next isolate = InstallScheduler.
-			// P1::InstallExtendedBuffers(30);
+			P1::InstallExtendedBuffers(30);
 			// v10-phase1 (2026-09-03): scheduler restored - thunk runs the
 			// ORIGINAL engine scheduler (func) then a register pass that
 			// publishes the engine's shadowLightsAccum into our
@@ -116,48 +97,6 @@ namespace ShadowLimitFixNS
 			// that list (SLF_MANUAL_RENDER=1) - engine schedules, WE render,
 			// so the engine's fixed 8-slot dispatch never touches the
 			// 127-slice array (v8-exp2 crash site avoided).
-			//
-			// fix74 (2026-09-09 23:5x): DISABLED - bisect verdict step 2.
-			// crash-2026-09-09-23-50-02 (indoor, Sleeping Giant Inn,
-			// fix73 md5 0dfe1463, uptime 113s): AV executing HEAP
-			// (RIP=0x1136471C00 = R14 CandleHornWall01 mesh +0x600) inside
-			// the SAME engine lighting-pass machinery as the outdoor crash
-			// (BSBatchRenderer_SetupAndDrawPass region uid 107639-107644),
-			// NO SLF frames on the stack. fix73 = engine-native 8-slice
-			// kSHADOWMAPS with NO render-loop rax=0 hook installed
-			// (Hook_RenderShadowLights is only installed inside
-			// InstallExtendedBuffers step 4 - fix73 skipped that whole
-			// function), so the ENGINE's vanilla dispatch ran unmodified
-			// against an accumulator the scheduler had flooded: the
-			// ShadowSceneNode dump shows Active Shadow Lights=21 (SLF
-			// scheduler publish, lightCount=21 BT rows from 23:49:56) and
-			// the engine's <=8-slot shadow state machine walked all 21 ->
-			// OOB descriptor state -> corrupted pointer in the lighting
-			// pass. fix69 (30-slice array + rax=0 stop + scheduler) never
-			// crashed indoors because rax=0 kept the engine dispatch off
-			// the flooded accumulator. fix73 left HALF the v10
-			// architecture (scheduler on, dispatch-stop off) and that
-			// half-combination is the indoor killer.
-			//
-			// fix74 = InstallScheduler off => engine scheduling +
-			// dispatch + rendering 100% vanilla (v7-vanilla proven state,
-			// HookUtil.h:331: "outdoor sun shadow RETURNED"). Sun stays
-			// (engine-rendered, fix73 outdoor verdict). Indoor shadow
-			// lights return to the engine's native budget - extended
-			// all-lights shadows then need the FULL CS-style coordinated
-			// engine-state expansion (accumulator + channel map +
-			// per-surface ceilings), not scheduler-plus-native-dispatch.
-			//
-			// fix75 (2026-09-10): RE-ENABLED stripped to ALWAYS_LIT-only.
-			// fix74 user report: "not always-lit anymore, vanilla walk-up
-			// behavior". The ALWAYS_LIT per-frame restore (fix34 fade
-			// cache overwrite + fix38 lodDimmer pin) lived inside this
-			// thunk, so disabling InstallScheduler killed "always lit"
-			// along with the scheduler. The thunk now runs func() then
-			// ONLY re-applies the lamp fade overrides (register/extend/
-			// publish/pin/probes stripped inside) - engine state stays
-			// 100% native (fix74 stability), lamps stay lit at any
-			// distance (fix34/fix38 mechanism restored).
 			P1::InstallScheduler();
 			// Material-pass sampling probe (22:3x flicker diagnosis): logs
 			// t103 view range + canvas content + engine shadow globals at
