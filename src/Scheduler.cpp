@@ -1902,7 +1902,22 @@ namespace ShadowLimitFixNS::P1
 	static bool WorldSwitching()
 	{
 		enum class Gate : std::uint8_t { kNone, kOpen, kCooldown };
-		static constexpr std::uint32_t kCooldownTicks = 360;
+		// fix53 (2026-09-09): two cooldown tiers. A load-UI close (save/load,
+		// full cell re-stream) keeps the long 360-tick settle the 00:04:14 /
+		// 23:28 UAF sessions needed. A camera jump (door travel / teleport /
+		// fast travel) is much lighter - the 00:04:14 UAF root cause (stale
+		// list entries) is already cut by freeze() zeroing the list at the
+		// moment the gate fires, and the camDflt guard in the dispatch skips
+		// any light whose shadow camera is still the default unit box, so the
+		// cooldown only has to cover the unload instant, not the whole
+		// stream-in. Three consecutive test sessions (fix51/fix52/fix52-retest
+		// 11:31) ended INSIDE the 360+120-tick window: the player quits after
+		// ~5 s of zero shadow rendering and the fix51 sun-render path never
+		// gets exercised once. 120 ticks (~2-3 s) + the 48-tick grace puts the
+		// dispatch live ~3-4 s after any outdoor teleport - inside the
+		// player's patience, still past the unload instant.
+		static constexpr std::uint32_t kLoadCooldownTicks = 360;  // load-UI close
+		static constexpr std::uint32_t kJumpCooldownTicks = 120;  // camera jump
 		static Gate s_gate = Gate::kNone;
 		static std::uint32_t s_cooldown = 0;
 		static std::uint32_t s_log = 0;
@@ -1935,9 +1950,9 @@ namespace ShadowLimitFixNS::P1
 			// Load UI just closed: world placed but still streaming in.
 			// Do NOT resume this frame - hold a cooldown tail instead.
 			s_gate = Gate::kCooldown;
-			s_cooldown = kCooldownTicks;
+			s_cooldown = kLoadCooldownTicks;
 			freeze();
-			SKSE::log::info("[SLF] world-switch gate: load UI closed, shadow writes frozen {} ticks", kCooldownTicks);
+			SKSE::log::info("[SLF] world-switch gate: load UI closed, shadow writes frozen {} ticks", kLoadCooldownTicks);
 			return true;
 		}
 		// Camera jump check (8 scheduler ticks ~ a few frames, cheap).
@@ -1957,9 +1972,9 @@ namespace ShadowLimitFixNS::P1
 			}
 			if (jumped) {
 				s_gate = Gate::kCooldown;
-				s_cooldown = kCooldownTicks;
+				s_cooldown = kJumpCooldownTicks;
 				freeze();
-				SKSE::log::info("[SLF] world-switch gate: camera jump, shadow writes frozen {} ticks", kCooldownTicks);
+				SKSE::log::info("[SLF] world-switch gate: camera jump, shadow writes frozen {} ticks", kJumpCooldownTicks);
 				return true;
 			}
 		}
@@ -2001,9 +2016,19 @@ namespace ShadowLimitFixNS::P1
 					// 240 ticks of pure dead time is what the user perceives
 					// as "sun gone". 120 (~2-3 s) still clears the engine
 					// settle window without a ~14 s shadow outage.
+					// fix53 (2026-09-09): 120 -> 48 with the camera-jump
+					// cooldown cut to 120 (see kJumpCooldownTicks). Sessions
+					// 11:13 and 11:31 BOTH ended ~2-5 s inside the 360+120
+					// window (log 11:31:15.57, cooldown 360 not yet over) -
+					// the player will not wait ~9-11 s. With EngineFixes'
+					// shadow hooks confirmed off (11:13 session: no crash) and
+					// the fix49 focus-scrub + fix51 camDflt fences in place,
+					// 48 ticks (~1 s) is enough cold-start buffer for the
+					// scheduler to re-learn the accumulator while the
+					// dispatch stays parked.
 					ShadowLimitFixNS::P1::g_shadowWritesFrozen.store(false, std::memory_order_release);
-					ShadowLimitFixNS::P1::g_resumeGrace.store(120, std::memory_order_release);
-					SKSE::log::info("[SLF] fix52 resume grace armed: dispatch parked {} ticks before live", 120u);
+					ShadowLimitFixNS::P1::g_resumeGrace.store(48, std::memory_order_release);
+					SKSE::log::info("[SLF] fix53 resume grace armed: dispatch parked {} ticks before live", 48u);
 				} else if ((s_log++ & 0x3Fu) == 0) {
 					SKSE::log::info("[SLF] world-switch gate: cooldown {} ticks left, writes frozen", s_cooldown);
 				}

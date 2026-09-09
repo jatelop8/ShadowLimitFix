@@ -1959,7 +1959,7 @@ namespace ShadowLimitFixNS::P1
 				// which with the fix51 240-tick arm produced a misleadingly
 				// late "parked 96 ticks" row ~2.4 s after the cooldown).
 				static std::uint32_t s_graceLog = 0;
-				if ((s_graceLog++ & 0xFFu) == 0 || g == 120)
+				if ((s_graceLog++ & 0xFFu) == 0 || g == 48)  // fix53: first armed tick
 					SKSE::log::info("[SLF] fix45 resume grace: manual dispatch parked {} ticks (load-settled render state)", g);
 				ShadowLimitFixNS::P1::g_resumeGrace.store(g - 1, std::memory_order_release);
 				s_afterGrace = 16;  // diagnostic window once we come back live
