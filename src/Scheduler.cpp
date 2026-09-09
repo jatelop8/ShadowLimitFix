@@ -1277,6 +1277,23 @@ namespace ShadowLimitFixNS::P1
 			// run that walk here, CS-style, with the current-cull-light armed:
 			// the hooks heal-attach every visible caster onto the light's
 			// geomList - exactly what our manual Render rasterizes.
+			//
+			// fix58 (2026-09-09): the SUN does NOT run this armed walk.
+			// fix48 removed that exclusion and the sun then got a SECOND
+			// same-frame armed accumulate on top of func()'s own - and the
+			// seven Render(sun) hangs (fix48-fix56, geom 2000+ every time)
+			// all started exactly when that double-accumulate went live.
+			// fix54 proved the armed walk is a no-op on the sun's already-full
+			// geomList (2016->2016) yet the hang persisted -> the corruption
+			// is the armed Accumulate call itself re-entering the engine's
+			// sun state mid-frame. fix57 then skipped the sun in the manual
+			// dispatch to hand it back to the engine's own cascade render,
+			// but this armed second accumulate was STILL live -> 12:48
+			// session: no sun shadow even with dispatch parked. Restore the
+			// fix46 shape: func() accumulates the sun (prologue vtable09 @
+			// 0x14CC5E5), we publish it from shadowLightsAccum below, and we
+			// NEVER re-accumulate it ourselves.
+			if (!light->GetIsDirectionalLight())
 			{
 				const auto pd = GetDescriptorReadiness(light);
 				const std::uint32_t smc = static_cast<std::uint32_t>(light->shadowMapCount);
