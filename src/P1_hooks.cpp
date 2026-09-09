@@ -1921,6 +1921,30 @@ namespace ShadowLimitFixNS::P1
 	static std::atomic<RE::BSShadowLight*> s_renderingLight{ nullptr };
 	static std::atomic<std::uint32_t> s_renderingSlot{ 0xFFFFFFFFu };
 
+	// fix60 (2026-09-09): SEH guard around the engine Render call. The
+	// 13:09 WER dump (CrashDumps/SkyrimSE.exe.38632.dmp) proved the eight
+	// 'sun render hangs' are actually engine AVs, not infinite loops: the
+	// faulting RIP executed at 0x11B8AD7400 - OUTSIDE every loaded module,
+	// i.e. a call through a corrupted pointer - faulting on a read of
+	// address 0x8. The gate outage corrupts engine shadow-pass state and
+	// the sun's directional cascade Render then calls through a bad
+	// pointer. CS wraps its per-light render in __try/__except
+	// (SafeEnableAndValidate, ShadowScheduler.cpp:1164) for exactly this
+	// class of failure. __declspec(noinline) is load-bearing: MSVC
+	// rejects __try in a frame that also holds C++ unwinding objects.
+	__declspec(noinline) static bool SafeLightRender(RE::BSShadowLight* a_light, std::uint32_t a_idx,
+		std::uint32_t a_slot, std::uint32_t a_li)
+	{
+		__try {
+			a_light->Render(a_idx);
+			return true;
+		} __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+			SKSE::log::error("[SLF] fix60 SEH caught AV in Render light#{} slot={} light=0x{:x} - skipped this frame",
+				a_li, a_slot, reinterpret_cast<uintptr_t>(a_light));
+			return false;
+		}
+	}
+
 	static void RenderScheduledShadowLightsDispatch()
 	{
 		// fix46 (2026-09-08): the world-switch gate zeroes the scheduled
@@ -2230,7 +2254,16 @@ namespace ShadowLimitFixNS::P1
 			// states that fix58 eliminated (armed double-accumulate) and
 			// fix46's proven shape needs neither (sun accumulated exactly
 			// once by func(), dispatch just draws). s_sunWarmup stays 0.
-			s.light->Render(idx);   // engine virtual: draws this light's shadows
+			// fix60: Render under SEH. An AV inside the engine Render
+			// (corrupted pointer after a gate outage - see the 13:09 WER
+			// dump analysis above) is caught and this light is skipped for
+			// the frame instead of taking the process down. The pin
+			// announcement is cleared so the next light starts clean.
+			if (!SafeLightRender(s.light, idx, s.slot, i)) {
+				s_renderingLight.store(nullptr, std::memory_order_relaxed);
+				s_renderingSlot.store(0xFFFFFFFFu, std::memory_order_relaxed);
+				continue;
+			}
 			if (diagLights)
 				SKSE::log::info("[SLF] fix45 post-render #{} slot={} ok", i, s.slot);
 			// fix19b: snapshot the descriptor slice Render left behind. The
