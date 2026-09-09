@@ -2084,8 +2084,19 @@ namespace ShadowLimitFixNS::P1
 	// the canvas, clear afterwards, and log begin/end around Render so a
 	// repeat hang pinpoints the exact statement (first 32 real renders
 	// log every frame).
-	static __declspec(noinline) std::uint32_t RenderSunCascadeSeh()
+	// fix82 (2026-09-10): capture the AV instruction address. fix81's
+	// armed heal collection finally filled geomList (geom=2360 logged)
+	// and the sun render stopped being skipped - but sun->Render now AVs
+	// EVERY frame (3x -> session-disable, "no sun shadows" symptom, log
+	// 01:24:21.938 #1/#2/x3). The render context was verified ready
+	// ([SUN] nd=2 camDflt=0 ortho=1 geom=2360 cam=0x1212f86780) so the AV
+	// is inside the engine cascade draw itself. Capture ExceptionAddress
+	// (filter expression - GetExceptionInformation is invalid in the
+	// handler body) so the caller can log exe-relative offset for symbol
+	// lookup.
+	static __declspec(noinline) std::uint32_t RenderSunCascadeSeh(std::uintptr_t* a_avAddr = nullptr)
 	{
+		std::uintptr_t avAddr = 0;
 		__try {
 			const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
 			for (std::uint32_t i = 0; i < n && i < 4; i++) {
@@ -2178,10 +2189,14 @@ namespace ShadowLimitFixNS::P1
 				return 0;
 			}
 			return 1;
-		} __except (EXCEPTION_EXECUTE_HANDLER) {
+		} __except ((avAddr = reinterpret_cast<std::uintptr_t>(
+						   GetExceptionInformation()->ExceptionRecord->ExceptionAddress),
+					   EXCEPTION_EXECUTE_HANDLER)) {
 			// fix71: never leave the SelectDSB context published after an AV.
 			s_renderingLight.store(nullptr, std::memory_order_relaxed);
 			s_renderingSlot.store(0xFFFFFFFFu, std::memory_order_relaxed);
+			if (a_avAddr)
+				*a_avAddr = avAddr;
 			return 3;
 		}
 	}
@@ -2311,18 +2326,26 @@ namespace ShadowLimitFixNS::P1
 			static std::uint32_t s_sunAv = 0;
 			static std::uint32_t s_sunLog = 0;
 			if (!s_sunBroken) {
-				const std::uint32_t sunCode = RenderSunCascadeSeh();
+				std::uintptr_t avAddr = 0;
+				const std::uint32_t sunCode = RenderSunCascadeSeh(&avAddr);
 				if (sunCode == 0) {
 					rendered++;
 					if (((s_sunLog++) & 0x3Fu) == 0)
 						SKSE::log::info("[SLF] fix70 sun cascade rendered OK (count={} slot0 first pass)",
 							ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire));
 				} else if (sunCode == 3) {
+					// fix82: log the AV instruction address (exe-relative)
+					// so the engine-side crash site can be symbolized from
+					// the offset (crash-*.log style SkyrimSE.exe+OFFSET).
+					const auto exeBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+					const std::uintptr_t rel = avAddr >= exeBase ? avAddr - exeBase : avAddr;
 					if (++s_sunAv >= 3) {
 						s_sunBroken = true;
-						SKSE::log::error("[SLF] fix70 sun Render AV x3 - sun render DISABLED for this session (fix68 behavior)");
+						SKSE::log::error("[SLF] fix70 sun Render AV x3 @ 0x{:x} (exe+0x{:x}) - sun render DISABLED for this session (fix68 behavior)",
+							avAddr, rel);
 					} else {
-						SKSE::log::error("[SLF] fix70 sun Render AV #{} (caught by SEH) - sun render still attempted next frame", s_sunAv);
+						SKSE::log::error("[SLF] fix70 sun Render AV #{} @ 0x{:x} (exe+0x{:x}) (caught by SEH) - sun render still attempted next frame",
+							s_sunAv, avAddr, rel);
 					}
 				} else if (logNow) {
 					SKSE::log::info("[SLF] fix70 sun skip code={} (1=no-dir 2=cam-not-placed 3=AV 4=caster-empty-spin)", sunCode);
