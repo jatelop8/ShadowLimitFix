@@ -147,7 +147,18 @@ namespace ShadowLimitFixNS
 			// all-lights shadows then need the FULL CS-style coordinated
 			// engine-state expansion (accumulator + channel map +
 			// per-surface ceilings), not scheduler-plus-native-dispatch.
-			// P1::InstallScheduler();
+			//
+			// fix75 (2026-09-10): RE-ENABLED stripped to ALWAYS_LIT-only.
+			// fix74 user report: "not always-lit anymore, vanilla walk-up
+			// behavior". The ALWAYS_LIT per-frame restore (fix34 fade
+			// cache overwrite + fix38 lodDimmer pin) lived inside this
+			// thunk, so disabling InstallScheduler killed "always lit"
+			// along with the scheduler. The thunk now runs func() then
+			// ONLY re-applies the lamp fade overrides (register/extend/
+			// publish/pin/probes stripped inside) - engine state stays
+			// 100% native (fix74 stability), lamps stay lit at any
+			// distance (fix34/fix38 mechanism restored).
+			P1::InstallScheduler();
 			// Material-pass sampling probe (22:3x flicker diagnosis): logs
 			// t103 view range + canvas content + engine shadow globals at
 			// the t14-bind sampling moment. Read-only; strip anytime.

@@ -1999,17 +1999,17 @@ namespace ShadowLimitFixNS::P1
 			func();
 			return;
 		}
-		// fix23 perf probe (2026-09-06): split per-frame CPU between the
-		// engine's own shadow scheduling (func) and our SLF post work
-		// (register/extend/publish/fill). PPT diagnosis: smooth room A ran
-		// ~110fps with this whole thunk costing a few ms, after a fast-
-		// travel round trip the SAME room dropped to ~9fps with identical
-		// per-frame shadow load - the probe tells us which half owns the
-		// missing 100ms (engine func vs SLF post) on the next test run.
-		using clk = std::chrono::steady_clock;
-		const auto s0 = clk::now();
+		// fix75 (2026-09-10): thunk stripped to ALWAYS_LIT-only restore.
+		// fix74 proved engine-native scheduling/dispatch = stable (sun
+		// stays, engine-rendered) but the walk-up lamp behavior RETURNED
+		// (user: "not always-lit anymore, vanilla walk-up"): the ALWAYS_LIT
+		// per-frame restore (fix34 fade cache + fix38 dimmer pin) lived
+		// inside this thunk, so disabling InstallScheduler killed "always
+		// lit" along with the scheduler. This thunk runs the engine
+		// scheduler untouched (func) then ONLY re-applies the lamp fade
+		// overrides - no register/extend/publish/pin/probe writes, so the
+		// engine state stays 100% native (fix74 stability preserved).
 		func();
-		const auto s1 = clk::now();
 #if SLF_ALWAYS_LIT
 		// fix34: lamps never fade (see macro comment).
 		ForceLightsAlwaysLit();
@@ -2025,58 +2025,27 @@ namespace ShadowLimitFixNS::P1
 				DimmerJumpProbe();
 		}
 #endif
-#if SLF_PIN_FIXED_LIGHTS > 0
-		// fix29: pin the fixed shadow-light set right after the engine
-		// scheduler filled the accumulator (see macro comment).
-		ShadowPinFixedLights();
-#endif
-		// v10-phase1: publish the engine's accumulator list for our
-		// self-dispatch (rax=0 + SLF_MANUAL_RENDER pair). The full v6.4
-		// roster scheduler (ScheduleShadowCasters above) returns in phase 2
-		// as a post-original pass over lights the engine did NOT slot.
-		RegisterEngineAccumLights();
-#if SLF_P2_EXTEND
-		// v10-phase2: append SLF-managed lights at slices 8..29 (pure SLF
-		// path, no engine accumulator interaction). Flip the gate after
-		// phase 1 proves the self-dispatch combo stable in-game.
-		ExtendScheduledLights();
-#endif
-		// fix15: publish the N-light data channel AFTER the final scheduled
-		// list exists (engine accum + extension). g_shadowLightCount feeds
-		// the fix12 swap gate; g_shadowLights feeds the b13 cbuffer.
-		PublishShadowLightDataChannel();
-		const auto s2 = clk::now();
-		static std::uint64_t s_fNs = 0, s_sNs = 0;
-		static std::uint32_t s_n = 0;
-		// fix31: activation-layer probe (throttled to every 128th scheduler
-		// invocation so it never perturbs frame timing).
-		// fix69: activation probe sampling 128->32 (same sub-128 rationale).
-		{
-			static std::uint32_t s_act = 0;
-			if ((s_act++ & 0x1Fu) == 0)
-				ActiveLightProbe();
-		}
-		s_fNs += static_cast<std::uint64_t>(
-			std::chrono::duration_cast<std::chrono::nanoseconds>(s1 - s0).count());
-		s_sNs += static_cast<std::uint64_t>(
-			std::chrono::duration_cast<std::chrono::nanoseconds>(s2 - s1).count());
-		if ((++s_n & 0x3Fu) == 0) {  // every 64 scheduler invocations
-			const double fMs = static_cast<double>(s_fNs) / 64.0 / 1e6;
-			const double sMs = static_cast<double>(s_sNs) / 64.0 / 1e6;
-			SKSE::log::info("[SLF][PERF] sched: eng-func={:.3f}ms slf-post={:.3f}ms avg (n=64)",
-				fMs, sMs);
-			s_fNs = s_sNs = 0;
-		}
+		// fix75: v10 register/extend/publish STRIPPED - they flooded the
+		// engine accumulator past its <=8-slot state machine under native
+		// dispatch (crash-2026-09-09-23-50-02, Sleeping Giant Inn, 21
+		// active shadow lights). Engine scheduling/dispatch is 100% native;
+		// extended all-lights shadows need the FULL CS-style engine-state
+		// expansion (accumulator + channel map + per-surface ceilings)
+		// later, not this half-measure.
+		// fix75: activation/perf probes stripped with the post-processing.
 	}
 
 	void InstallScheduler()
 	{
-		// v10-phase1c: the AppendVirtual caster-collection hooks must be live
-		// BEFORE the first RegisterEngineAccumLights accumulate (the cull walk
-		// only produces geometry because these hooks attach it).
-		InstallCasterCullHook();
-		SKSE::log::info("[SLF] P1c-1b installing REAL scheduler (engine func() first, then register + phase1c accumulate)...");
+		// fix75: ALWAYS_LIT-only scheduler. InstallCasterCullHook (the CS
+		// AppendVirtual caster-collection chain) NOT installed - it only
+		// existed to feed RegisterEngineAccumLights/ExtendScheduledLights,
+		// which are stripped from the thunk. The detour below runs the
+		// engine scheduler untouched (func) then re-applies the lamp fade
+		// overrides every frame (fix34/fix38), restoring "always lit"
+		// under 100% native engine scheduling/dispatch.
+		SKSE::log::info("[SLF] fix75 installing ALWAYS_LIT scheduler (engine func() + lamp fade restore only)...");
 		stl::detour_thunk<Hook_CalculateActiveShadowCasters>(REL::RelocationID(100419, 107137));
-		SKSE::log::info("[SLF] P1c-1b scheduler installed");
+		SKSE::log::info("[SLF] fix75 ALWAYS_LIT scheduler installed");
 	}
 }
