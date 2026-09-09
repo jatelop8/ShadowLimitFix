@@ -2150,13 +2150,24 @@ namespace ShadowLimitFixNS::P1
 								static_cast<std::uint32_t>(rtd.shadowmapDescriptors.size()), smc);
 					}
 				}
+				// fix79 (2026-09-10): caster-empty NO LONGER skips the sun
+				// render. fix72/77/78 (9 rounds) measured sceneAccum=0
+				// geom=0 every frame and skipped -> sun->Render never ran
+				// once since fix71 fixed the DSV context (0 "Render begin"
+				// lines in any log). Point lights render fine with a live
+				// descriptor + empty sceneAccum (engine Render self-culls),
+				// so the caster-empty gate here was over-defensive: fix70's
+				// freeze was the missing SelectDSB context (fixed by fix71),
+				// NOT empty casters. Let the sun render through the same
+				// verified context as a point light (descriptor pin +
+				// s_renderingLight/s_renderingSlot publish + SEH + 3-strike
+				// AV disable). Log the first empty-caster renders for trace.
 				if (rtd.sceneAccumArray.empty() && s.light->geomList.empty()) {
 					static std::uint32_t s_sunEmptyLog = 0;
-					if ((s_sunEmptyLog++ & 0x3Fu) == 0)
-						SKSE::log::info("[SLF] fix72 sun: no casters after Accumulate (acc={} geom={}) - render skipped",
+					if ((s_sunEmptyLog++ & 0x1Fu) == 0)
+						SKSE::log::info("[SLF] fix79 sun: caster empty (acc={} geom={}) - rendering anyway (fix71 DSV ctx)",
 							static_cast<std::uint32_t>(rtd.sceneAccumArray.size()),
 							static_cast<std::uint32_t>(s.light->geomList.size()));
-					return 2;
 				}
 				// Publish the render context exactly like the point-light
 				// loop does, so SelectDepthBuffer1/2 force the canvas to the
