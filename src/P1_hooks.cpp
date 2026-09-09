@@ -2037,6 +2037,21 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
+			// fix63 (2026-09-09, comprehensive): the sun NEVER renders
+			// through this manual dispatch. Eight+ Render(sun) hangs/AVs
+			// (WER SkyrimSE.exe.38632.dmp: faulting RIP outside every
+			// module = call through a corrupted pointer) proved the engine's
+			// directional cascade render is STRUCTURALLY incompatible with
+			// SLF's shadow-array expansion when invoked here - independent
+			// of armed/geom/accumulate/warmup/gate (fix48-fix62). fix44's
+			// rule (engine can never dispatch under the 127-slice array)
+			// rules out handing the sun back to the engine dispatch. So the
+			// sun shadow stays a known limitation, but the SUN LIGHT is
+			// decoupled: the B4c surface-lighting hook (fix63 part 2) fills
+			// lights[0] with the resolved sun source directly (CS-aligned),
+			// so sunlight no longer depends on any shadow render call.
+			if (s.light->GetIsDirectionalLight())
+				continue;
 			// v10-phase2-fix (SC-A 21:33): engine Render selects the depth
 			// slice from the light's descriptor shadowmapIndex, but for
 			// slot>=8 lights that field read 0 at render time (engine
