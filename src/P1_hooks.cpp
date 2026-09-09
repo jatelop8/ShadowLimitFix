@@ -1952,6 +1952,7 @@ namespace ShadowLimitFixNS::P1
 		// first 16 live frames log every per-light Render so a repeat
 		// freeze pinpoints the exact light.
 		static std::uint32_t s_afterGrace = 0;
+		static std::uint32_t s_sunWarmup = 0;  // fix56: armed on dispatch-live, decremented per frame
 		{
 			const std::uint32_t g = ShadowLimitFixNS::P1::g_resumeGrace.load(std::memory_order_acquire);
 			if (g > 0) {
@@ -1967,8 +1968,26 @@ namespace ShadowLimitFixNS::P1
 			}
 		}
 		const bool diagLights = s_afterGrace > 0;
-		if (diagLights && (--s_afterGrace == 15))
+		if (diagLights && (--s_afterGrace == 15)) {
 			SKSE::log::info("[SLF] fix45 grace over - dispatch live, per-light diagnostic for {} frames", 16u);
+			// fix56 (2026-09-09): sun warmup window. Six sun-render hangs
+			// (01:46/01:59/11:04/11:41/12:04/12:16) ALL fired on the first
+			// dispatch frame after a world-switch gate, with a state-healthy
+			// sun (geom=2016 nd=2 camDflt=0) - and 9-06 rendered the sun
+			// fine with NO gate (dispatch never stopped). The 12:16 session
+			// pinned the hang to inside Render() BEFORE the draw-time DSV
+			// select (no SelectDSB row after post-accum). Hypothesis: after
+			// a ~4-9s total shadow-render outage the ENGINE's shadow-pass
+			// context needs a few active dispatch frames to rebuild before a
+			// directional cascade render is safe. Skip the sun for the
+			// first kLiveFrames of the resumed dispatch (point lights keep
+			// rendering) and log every skip, so the log shows whether the
+			// sun survives a warm start (fix = outage-context) or still
+			// hangs on frame kLiveFrames+1 (fix = sun render path itself).
+			constexpr std::uint32_t kSunWarmupFrames = 32;
+			s_sunWarmup = kSunWarmupFrames;
+			SKSE::log::info("[SLF] fix56 sun warmup armed: {} live frames before sun renders", kSunWarmupFrames);
+		}
 		if (diagLights)
 			SKSE::log::info("[SLF] fix45 diag: dispatch n={}", n);
 
@@ -2165,6 +2184,18 @@ namespace ShadowLimitFixNS::P1
 					drtd.shadowmapDescriptors.empty() ? -1 :
 						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex),
 					drtd.drawFocusShadows ? 1 : 0);
+			}
+			// fix56 (2026-09-09): sun warmup skip - the resumed dispatch
+			// skips the sun for 32 live frames (point lights still render)
+			// so the engine's shadow-pass context rebuilds before the
+			// directional cascade render. Logs every skip; see the arm
+			// comment above for the two-way readout.
+			if (s.light->GetIsDirectionalLight() && s_sunWarmup > 0) {
+				s_sunWarmup--;
+				if (diagLights || (s_sunWarmup & 0x7u) == 0)
+					SKSE::log::info("[SLF] fix56 sun warmup skip #{} ({} warmup frames left, geom={})",
+						s.slot, s_sunWarmup, static_cast<std::uint32_t>(s.light->geomList.size()));
+				continue;
 			}
 			// fix55 (2026-09-09): CS SetupSunLight alignment, BARE accumulate.
 			// fix54's armed re-collection (SetCurrentCullLight + heal-attach)
