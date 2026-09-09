@@ -2025,6 +2025,19 @@ namespace ShadowLimitFixNS::P1
 				DimmerJumpProbe();
 		}
 #endif
+		// fix76 (2026-09-10): scene-level lamp audit probe RESTORED (read-
+		// only). fix75 stripped ActiveLightProbe along with the scheduler
+		// post-processing; the user then added ~6 new lamps in-game and
+		// asked "how many lamps can you detect?". [ACT] lines print the
+		// engine ShadowSceneNode activeLights / activeShadowLights counts
+		// every 32nd scheduler tick (fix69 sampling) + churn detail
+		// (addr@worldpos) so newly added lamps show up as "+" entries
+		// with coordinates. Pure observation - zero engine-state writes.
+		{
+			static std::uint32_t s_act = 0;
+			if ((s_act++ & 0x1Fu) == 0)
+				ActiveLightProbe();
+		}
 		// fix75: v10 register/extend/publish STRIPPED - they flooded the
 		// engine accumulator past its <=8-slot state machine under native
 		// dispatch (crash-2026-09-09-23-50-02, Sleeping Giant Inn, 21
