@@ -1995,7 +1995,22 @@ namespace ShadowLimitFixNS::P1
 	// (outdoor AV inside BSBatchRenderer machinery, crash-2026-09-09-
 	// 23-29-05, Riverwood). This is the parked ScheduleShadowCasters sun
 	// block (Scheduler.cpp:218) activated, with the same v4 crash gate.
-	static void AccumulateSunEarly()
+	//
+	// fix81 (2026-09-10): armed heal chain. fix77/78 (bare Accumulate,
+	// pre- or post-func) measured acc=0 geom=0 every frame - the bare
+	// engine Accumulate (0x1511C80 disasm) only registers descriptors,
+	// it has no geometry output path. Point lights only ever collect
+	// casters because RegisterEngineAccumLights runs their Accumulate
+	// with SetCurrentCullLight ARMED + s_accumRebuildAttach set, and the
+	// AppendVirtual hooks (Hook_Parabolic/BaseCullAppend) then heal-
+	// attach every visible caster onto the light's geomList (the exact
+	// CS chain, ShadowScheduler.cpp:900-943). The sun was excluded from
+	// that chain (`if (!isDir)` in RegisterEngineAccumLights) on the
+	// wrong assumption that "func() accumulated the SUN itself" fills
+	// geometry - it does not. Give the sun the same armed walk so its
+	// geomList fills and RenderSunCascadeSeh has geometry to rasterize
+	// (fix80 parks on empty casters: code=4).
+	static void AccumulateSunCasters()
 	{
 		auto* ssn = GetShadowSceneNode();
 		if (!ssn)
@@ -2003,31 +2018,54 @@ namespace ShadowLimitFixNS::P1
 		auto* sun = ssn->GetRuntimeData().sunShadowDirLight;
 		if (!sun)
 			return;
-		// Already accumulated this frame by the engine's own func()?
-		if (!sun->GetRuntimeData().sceneAccumArray.empty())
+		// Caster geometry already present this frame (engine or us) - the
+		// once-per-geometry latch would skip re-attach anyway (kRenderUse).
+		if (!sun->geomList.empty())
 			return;
 		const auto rd = GetDescriptorReadiness(sun);
 		const std::uint32_t smc = static_cast<std::uint32_t>(sun->shadowMapCount);
 		const bool ready = rd.total != 0 && rd.accNull == 0 && smc <= rd.total;
-		if (ready) {
-			sun->Accumulate(*GetAccumLightSlot(), 0, nullptr);
-			static std::uint32_t s_log = 0;
-			if ((s_log++ & 0x3Fu) == 0) {
-				auto& srtd = sun->GetRuntimeData();
-				SKSE::log::info("[SLF] fix77 sun-early: Accumulate ok acc={} geom={} idx0={}",
-					static_cast<std::uint32_t>(srtd.sceneAccumArray.size()),
-					static_cast<std::uint32_t>(sun->geomList.size()),
-					srtd.shadowmapDescriptors.empty() ? 0u : srtd.shadowmapDescriptors[0].shadowmapIndex);
-			}
-		} else if (rd.total == 0) {
-			static std::uint32_t s_noDesc = 0;
-			if ((s_noDesc++ & 0x3Fu) == 0)
-				SKSE::log::info("[SLF] fix77 sun-early: defer - no shadow descriptors yet (engine not ready)");
-		} else {
+		if (!ready) {
 			static std::uint32_t s_def = 0;
-			if ((s_def++ & 0x3Fu) == 0)
-				SKSE::log::info("[SLF] fix77 sun-early: DEFER accumulate (crash guard) total={} smc={} accNull={} camNull={}",
+			const std::uint32_t n = ++s_def;
+			if (rd.total == 0) {
+				if ((n & 0x3Fu) == 0)
+					SKSE::log::info("[SLF] fix81 sun-casters: defer - no shadow descriptors yet (engine not ready)");
+			} else if (n == 1 || (n & 0x3Fu) == 0) {
+				SKSE::log::info("[SLF] fix81 sun-casters: DEFER (crash guard) total={} smc={} accNull={} camNull={}",
 					rd.total, smc, rd.accNull, rd.camNull);
+			}
+			return;
+		}
+		// Armed walk: identical shape to the point-light heal chain
+		// (RegisterEngineAccumLights / ExtendScheduledLights). The sun's
+		// cascade cull reaches the same AppendVirtual hooks (CS
+		// ShadowCasterClassifier.cpp:421 "this shared base-class code also
+		// reaches the sun's cascade cull"); with the light armed the hooks
+		// heal-attach every visible caster into the sun's geomList.
+		SetCurrentCullLight(sun);
+		struct ClearCullLight
+		{
+			~ClearCullLight() { SetCurrentCullLight(nullptr); }
+		} clearGuard;
+		s_healAttached.clear();
+		s_accumRebuildAttach.store(true, std::memory_order_relaxed);
+		{
+			// Throwaway count ref (same rule as phase1c): the sun's slot-0
+			// registration lives in the engine accumulator (func wrote it),
+			// never pass the real global counter.
+			std::uint32_t localSlot = 0;
+			sun->Accumulate(localSlot, 0, nullptr);
+		}
+		s_accumRebuildAttach.store(false, std::memory_order_relaxed);
+		static std::uint32_t s_log = 0;
+		if ((s_log++ & 0x1Fu) == 0) {
+			auto& srtd = sun->GetRuntimeData();
+			SKSE::log::info("[SLF] fix81 sun-casters: armed accumulate done acc={} geom={} descs={} idx0={}",
+				static_cast<std::uint32_t>(srtd.sceneAccumArray.size()),
+				static_cast<std::uint32_t>(sun->geomList.size()),
+				static_cast<std::uint32_t>(srtd.shadowmapDescriptors.size()),
+				srtd.shadowmapDescriptors.empty() ? 0u : srtd.shadowmapDescriptors[0].shadowmapIndex);
 		}
 	}
 
@@ -2052,25 +2090,23 @@ namespace ShadowLimitFixNS::P1
 		// travel round trip the SAME room dropped to ~9fps with identical
 		// per-frame shadow load - the probe tells us which half owns the
 		// missing 100ms (engine func vs SLF post) on the next test run.
-		// fix78 (2026-09-10): accumulate the sun BEFORE func(), not after.
-		// fix77 ran AccumulateSunEarly post-func and measured acc=0 geom=0
-		// every time (crash frame: "fix77 sun-early: Accumulate ok acc=0
-		// geom=0"). CS SetupSunLight accumulates inside its own scheduler
-		// right after ResetCalculatedShadowCasterLights and BEFORE the
-		// engine's CalculateActiveShadowCasters cull walk (ShadowScheduler.
-		// cpp:3058 "ResetCalculated... called before this hook... installed
-		// the sun at slot 0"). Running it post-func means the engine already
-		// consumed/rewrote the cull structures inside func(), so the sun's
-		// Accumulate has nothing left to collect. Pre-func = the same clean
-		// window CS uses. The v4 crash gate (descriptor readiness) stays, so
-		// no call is made while the engine is still rebuilding shadow state.
-		// If the engine inside func() re-clears sun sceneAccumArray this is a
-		// no-op (render-loop hook re-accumulates as the fix72 fallback).
-		AccumulateSunEarly();
+		// fix78 (2026-09-10): bare accumulate ran pre-func and measured
+		// acc=0 geom=0; fix81 (2026-09-10) replaces it with the ARMED heal
+		// walk (AccumulateSunCasters) and runs it AFTER func(): the engine
+		// scheduler just finished ResetCalculatedShadowCasterLights + its
+		// own slotting, so the sun's descriptors/cameras are mounted and
+		// the sun is installed at slot 0 (CS SetupSunLight equivalence,
+		// ShadowScheduler.cpp:3058 "ResetCalculated... installed the sun at
+		// slot 0"). Post-func also guarantees func() cannot clear geometry
+		// we just collected. The v4 crash gate (descriptor readiness)
+		// stays, so no call is made while the engine is still rebuilding
+		// shadow state. If the collection still comes up empty the
+		// render-loop hook parks on fix80 code=4 (never render blind).
 		using clk = std::chrono::steady_clock;
 		const auto s0 = clk::now();
 		func();
 		const auto s1 = clk::now();
+		AccumulateSunCasters();
 #if SLF_ALWAYS_LIT
 		// fix34: lamps never fade (see macro comment).
 		ForceLightsAlwaysLit();
