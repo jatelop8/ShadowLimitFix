@@ -2052,15 +2052,25 @@ namespace ShadowLimitFixNS::P1
 		// travel round trip the SAME room dropped to ~9fps with identical
 		// per-frame shadow load - the probe tells us which half owns the
 		// missing 100ms (engine func vs SLF post) on the next test run.
+		// fix78 (2026-09-10): accumulate the sun BEFORE func(), not after.
+		// fix77 ran AccumulateSunEarly post-func and measured acc=0 geom=0
+		// every time (crash frame: "fix77 sun-early: Accumulate ok acc=0
+		// geom=0"). CS SetupSunLight accumulates inside its own scheduler
+		// right after ResetCalculatedShadowCasterLights and BEFORE the
+		// engine's CalculateActiveShadowCasters cull walk (ShadowScheduler.
+		// cpp:3058 "ResetCalculated... called before this hook... installed
+		// the sun at slot 0"). Running it post-func means the engine already
+		// consumed/rewrote the cull structures inside func(), so the sun's
+		// Accumulate has nothing left to collect. Pre-func = the same clean
+		// window CS uses. The v4 crash gate (descriptor readiness) stays, so
+		// no call is made while the engine is still rebuilding shadow state.
+		// If the engine inside func() re-clears sun sceneAccumArray this is a
+		// no-op (render-loop hook re-accumulates as the fix72 fallback).
+		AccumulateSunEarly();
 		using clk = std::chrono::steady_clock;
 		const auto s0 = clk::now();
 		func();
 		const auto s1 = clk::now();
-		// fix77: accumulate the sun's casters NOW (scheduler window) so the
-		// render-loop hook can render the sun with real geometry instead of
-		// skipping it (fix72 geom=0). No-op when the engine already filled
-		// sceneAccumArray inside func().
-		AccumulateSunEarly();
 #if SLF_ALWAYS_LIT
 		// fix34: lamps never fade (see macro comment).
 		ForceLightsAlwaysLit();
