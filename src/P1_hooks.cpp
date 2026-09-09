@@ -2037,6 +2037,21 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
+			// fix64 step3 (2026-09-09): the sun NEVER renders through this
+			// dispatch. Ten+ empirical confirmations (fix48-fix64 step2:
+			// WER RIP 0x224392E00 / 0x11B8AD7400, both outside every module,
+			// reading addr 8 = call through a corrupted pointer) prove the
+			// engine's directional cascade render is structurally broken
+			// when invoked from SLF's manual dispatch under the expanded
+			// shadow array - independent of armed/geom/accumulate/warmup/
+			// count(127 vs 30)/EngineFixes state. Point-light rendering is
+			// the SLF value (21 lights, post-render all =S) and stays.
+			// Sunlight is engine-side and does NOT depend on this render
+			// when EngineFixes runs with its stock config (the earlier
+			// 'sunlight vanished' observations were confounded by the
+			// EngineFixes shadow hooks being disabled).
+			if (s.light->GetIsDirectionalLight())
+				continue;
 			// v10-phase2-fix (SC-A 21:33): engine Render selects the depth
 			// slice from the light's descriptor shadowmapIndex, but for
 			// slot>=8 lights that field read 0 at render time (engine
