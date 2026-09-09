@@ -2038,6 +2038,66 @@ namespace ShadowLimitFixNS::P1
 		}
 	}
 
+	// ---------------------------------------------------------------------
+	// fix70 (2026-09-09): CS-recipe sun cascade render.
+	//
+	// The engine dispatch is stopped (Hook_RenderShadowLights sets rax=0),
+	// so NOBODY renders the directional (sun) light's cascade depth maps
+	// any more - fix69's SUN baseline showed the sun entering the scheduled
+	// set outdoors with a LIVE ortho frustum (camDflt=0, engine maintains
+	// it) but geom=0 and the render loop skipping it (fix64 step3
+	// dirSkip) -> exterior scenes have no sun shadow, and per the user the
+	// sunlight is gone too. Community Shaders solves the identical
+	// architecture (rax=0 stops the engine walk, LLF renders from its own
+	// list) by rendering the sun EXPLICITLY, first, slot 0
+	// (ShadowScheduler.cpp ~3167: "sun.Render must be called explicitly...
+	// Without this, exterior scenes render with no sun shadow").
+	//
+	// SLF's own fix48-fix64 sun-render attempts AV'd (corrupt-pointer
+	// class) - but those ran under EngineFixes shadow hooks disabled and
+	// pre-camDflt descriptor state, and CS proves the recipe sound. Render
+	// under SEH: a repeat AV is caught, counted and (after 3) disables the
+	// sun render for the session, degrading back to fix68 behavior instead
+	// of crashing. __declspec(noinline) + no C++ objects so __try compiles
+	// under /EHsc (same pattern as SnapshotLightD0).
+	//
+	// Returns: 0 = rendered OK, 1 = no directional in scheduled set,
+	//          2 = camera not placed (engine not maintaining the sun yet),
+	//          3 = AV caught.
+	static __declspec(noinline) std::uint32_t RenderSunCascadeSeh()
+	{
+		__try {
+			const std::uint32_t n = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
+			for (std::uint32_t i = 0; i < n && i < 4; i++) {
+				auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
+				if (!s.light || !s.light->GetIsDirectionalLight())
+					continue;
+				// Same placement fence as the point-light loop (fix64 step3c):
+				// a default unit-box frustum means the engine has not placed
+				// the sun's shadow camera this frame - rendering now would
+				// rasterize nothing (or spin). fix69 shows camDflt=0 with a
+				// live ortho frustum outdoors, so this is normally passable.
+				auto& rtd = s.light->GetRuntimeData();
+				if (rtd.shadowmapDescriptors.empty() || !rtd.shadowmapDescriptors[0].camera)
+					return 2;
+				const auto& fr = rtd.shadowmapDescriptors[0].camera->GetRuntimeData2().viewFrustum;
+				const bool dflt = fr.fLeft == -1.0f && fr.fRight == 1.0f &&
+					fr.fTop == 1.0f && fr.fBottom == -1.0f &&
+					fr.fNear == 0.1f && fr.fFar == 1.0f;
+				if (dflt)
+					return 2;
+				// Render arg 0 = the in-game-verified recipe shape (sun and
+				// points alike; the slice comes from descriptor shadowmapIndex).
+				std::uint32_t idx = 0;
+				s.light->Render(idx);
+				return 0;
+			}
+			return 1;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return 3;
+		}
+	}
+
 	static void RenderScheduledShadowLightsDispatch()
 	{
 		// fix46 (2026-09-08): the world-switch gate zeroes the scheduled
@@ -2152,23 +2212,48 @@ namespace ShadowLimitFixNS::P1
 		std::uint32_t camSkipped = 0;
 		std::array<std::uint32_t, 128> postIdx{};
 		postIdx.fill(0xFFFFFFFFu);
+
+		// fix70 (2026-09-09): render the sun's cascade FIRST, CS recipe
+		// (see RenderSunCascadeSeh). fix64 step3 skipped the directional
+		// light entirely (dirSkip below stays as the second fence so the
+		// point-light loop never double-renders it). 3 consecutive AVs
+		// disable the sun render for the session -> degrades to fix68.
+		{
+			static bool s_sunBroken = false;
+			static std::uint32_t s_sunAv = 0;
+			static std::uint32_t s_sunLog = 0;
+			if (!s_sunBroken) {
+				const std::uint32_t sunCode = RenderSunCascadeSeh();
+				if (sunCode == 0) {
+					rendered++;
+					if (((s_sunLog++) & 0x3Fu) == 0)
+						SKSE::log::info("[SLF] fix70 sun cascade rendered OK (count={} slot0 first pass)",
+							ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire));
+				} else if (sunCode == 3) {
+					if (++s_sunAv >= 3) {
+						s_sunBroken = true;
+						SKSE::log::error("[SLF] fix70 sun Render AV x3 - sun render DISABLED for this session (fix68 behavior)");
+					} else {
+						SKSE::log::error("[SLF] fix70 sun Render AV #{} (caught by SEH) - sun render still attempted next frame", s_sunAv);
+					}
+				} else if (logNow) {
+					SKSE::log::info("[SLF] fix70 sun skip code={} (1=no-dir 2=cam-not-placed 3=AV)", sunCode);
+				}
+			}
+		}
+
 		for (std::uint32_t i = 0; i < n; i++) {
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
-			// fix64 step3 (2026-09-09): the sun NEVER renders through this
-			// dispatch. Ten+ empirical confirmations (fix48-fix64 step2:
-			// WER RIP 0x224392E00 / 0x11B8AD7400, both outside every module,
-			// reading addr 8 = call through a corrupted pointer) prove the
-			// engine's directional cascade render is structurally broken
-			// when invoked from SLF's manual dispatch under the expanded
-			// shadow array - independent of armed/geom/accumulate/warmup/
-			// count(127 vs 30)/EngineFixes state. Point-light rendering is
-			// the SLF value (21 lights, post-render all =S) and stays.
-			// Sunlight is engine-side and does NOT depend on this render
-			// when EngineFixes runs with its stock config (the earlier
-			// 'sunlight vanished' observations were confounded by the
-			// EngineFixes shadow hooks being disabled).
+			// fix64 step3 (2026-09-09), amended fix70: the sun is rendered
+			// by the fix70 pre-loop block (RenderSunCascadeSeh, CS recipe)
+			// and must NEVER render through this point-light loop - keep the
+			// skip as the second fence against double-render. The fix48-fix64
+			// AV history below is why the pre-loop render is SEH-guarded with
+			// a 3-strike disable; fix70 re-tests the sun render under the
+			// current (EngineFixes stock, camDflt-gated) state because CS
+			// renders the sun explicitly in the same rax=0 architecture.
 			if (s.light->GetIsDirectionalLight()) {
 				dirSkipped++;
 				continue;
