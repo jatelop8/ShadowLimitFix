@@ -1270,17 +1270,6 @@ namespace ShadowLimitFixNS::P1
 			// the hooks heal-attach every visible caster onto the light's
 			// geomList - exactly what our manual Render rasterizes.
 			const bool isDir = light->GetIsDirectionalLight();
-#if SLF_SKIP_VANILLA_DISPATCH
-			// fix67 (2026-09-09) EXPERIMENT B': this accumulate is compiled
-			// OUT when the vanilla dispatch is live. SLF_SKIP_VANILLA_DISPATCH
-			// =1 (SLF fully owns the render: rax=0 skips the engine dispatch,
-			// so nothing else collects these lights' casters) -> WE must run
-			// the CS AppendVirtual cull walk here. =0 (fix67 B': engine
-			// dispatch renders the accumulator lights natively) -> the
-			// engine's own render path AccumulateLights them; pre-collecting
-			// here would double their geometry. Publishing (below) stays
-			// unconditional - the data channel + ExtendScheduledLights base
-			// need the full prefix regardless of who renders it.
 			if (!isDir) {
 				const auto pd = GetDescriptorReadiness(light);
 				const std::uint32_t smc = static_cast<std::uint32_t>(light->shadowMapCount);
@@ -1338,7 +1327,6 @@ namespace ShadowLimitFixNS::P1
 							reinterpret_cast<uintptr_t>(light), pd.accNull, pd.camNull, pd.total, smc, idx);
 				}
 			}
-#endif  // SLF_SKIP_VANILLA_DISPATCH (fix67 B' compile-out)
 
 			// [SLF][R1] published-side portrait (throttled): position of
 			// each light the engine DID slot, to contrast with the rejected

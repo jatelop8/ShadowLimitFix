@@ -2037,19 +2037,6 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
-			// fix67 (2026-09-09) EXPERIMENT B': slice isolation. With
-			// SLF_SKIP_VANILLA_DISPATCH=0 the ENGINE dispatch renders the
-			// accumulator lights (func() product: sun + engine-budget point
-			// lights, all slot<8, descriptors 0..7) natively. This manual
-			// dispatch must render ONLY the SLF extension lights -
-			// ExtendScheduledLights always slots them >= 8 (Scheduler.cpp
-			// slot = ENGINE_ACCUM_CAPACITY). Rendering slot<8 here too
-			// re-renders the SAME light the engine walk renders in the same
-			// frame (the fix66 experiment-A duplicate-producer crash: engine
-			// walk hit per-light state our Render had just mutated -> RIP=0
-			// null vtable). slot<8 == engine's own set by construction.
-			if (s.slot < 8u)
-				continue;
 			// fix64 step3 (2026-09-09): the sun NEVER renders through this
 			// dispatch. Ten+ empirical confirmations (fix48-fix64 step2:
 			// WER RIP 0x224392E00 / 0x11B8AD7400, both outside every module,
@@ -2184,12 +2171,6 @@ namespace ShadowLimitFixNS::P1
 		for (std::uint32_t i = 0; i < n; i++) {
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light || s.light->GetIsDirectionalLight())
-				continue;
-			// fix67 B': never re-pin engine-owned (slot<8) descriptors.
-			// The engine dispatch renders those lights natively and its
-			// Render writes their slice itself; re-pinning here would race
-			// its state machine (and re-write what func() already set).
-			if (s.slot < 8u)
 				continue;
 			auto& rtd = s.light->GetRuntimeData();
 			for (auto& d : rtd.shadowmapDescriptors)

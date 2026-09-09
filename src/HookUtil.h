@@ -454,32 +454,7 @@ namespace ShadowLimitFixNS::P1
 // to disjoint slices (SLF only slot>=8, engine only accumulator 0..7),
 // or (b) single dispatcher that renders sun (engine) AND point lights
 // (ours) by short-circuiting per-light in the hook.
-//
-// fix67 (2026-09-09) EXPERIMENT B': variant (a) - SLICE-ISOLATED DUAL
-// DISPATCH. Engine dispatch renders the accumulator lights (func()
-// product = sun + engine-budget point lights, accumulator indices 0..k,
-// k<8), and our manual dispatch renders ONLY the SLF extension lights
-// (ExtendScheduledLights always slots them >= 8 - Scheduler.cpp
-// slot = ENGINE_ACCUM_CAPACITY). The two producers touch DISJOINT light
-// sets and disjoint depth slices (engine 0..7, SLF 8..29):
-//   - the engine walk (uid107133 dispatch fn 0x14CBFF0, disassembled
-//     21:5x: helper 0x1414A4010 = [ssn+0x230][idx] accumulator fetch,
-//     loop renders accumulator[idx] via vtable[0x50] until null) never
-//     sees the extension lights - they are never written into the
-//     accumulator (PIN=0, Extend NEVER GameSetShadowCasterSlot >= 8);
-//   - our dispatch skips slot<8 (below) so it never re-renders the
-//     lights the engine walk renders -> the fix66 experiment-A
-//     duplicate-producer crash (engine walk hit per-light state our
-//     Render had just mutated) is structurally excluded.
-// RegisterEngineAccumLights' phase1c accumulate for accumulator lights
-// is compiled out under SKIP=0 (Scheduler.cpp): the engine's own render
-// path collects their geometry; pre-collecting would double it.
-// First CLEAN test of engine dispatch + count=30 + no SLF render of
-// engine lights. Expected: sun/sunlight back (engine renders the sun
-// cascade natively) + indoor 21-30 lights keep full shadows (SLF
-// renders 8-29). If it crashes at the engine walk's call [r8+0x50],
-// engine dispatch + count=30 is itself fatal -> fall back to count=8.
-#define SLF_SKIP_VANILLA_DISPATCH 0
+#define SLF_SKIP_VANILLA_DISPATCH 1
 
 // P1b full mode - real depth-buffer expansion (>8 slices) + render-loop hook.
 // slice=8 mechanism verified in-game (00:37) -> enable full mode for slice=9.
