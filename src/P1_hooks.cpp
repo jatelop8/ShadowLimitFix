@@ -2084,13 +2084,22 @@ namespace ShadowLimitFixNS::P1
 			// rax=0 stop. fix48 (01:38) dragged the sun into this list to
 			// paper over fix47's sceneAccum==0 skip bug - wrong tool:
 			// fix51 already fixed the real bug with the camDflt gate.
-			// Restore the fix46 division of labor: engine owns the sun
-			// cascade, this dispatch owns point lights only.
-			if (s.light->GetIsDirectionalLight()) {
-				if (diagLights)
-					SKSE::log::info("[SLF] fix57 sun skip: engine-owned cascade (not in manual dispatch) slot={}", s.slot);
-				continue;
-			}
+			// fix59 (2026-09-09): SUPERSEDES fix57's sun skip. The sun IS
+			// rendered through this dispatch - but as a pure DRAW, with
+			// every SLF-side sun mechanism stripped. fix57 skipped it to
+			// hand it to "the engine's own cascade" - wrong: the engine's
+			// shadow draw lives in the dispatch chain our rax=0 stops
+			// (12:48 session: dispatch parked, NO sun shadow), so the sun
+			// draw must be triggered here, exactly as CS renders Light[0]=
+			// sun under its identical rax=0. The corruption that made
+			// Render(sun) hang seven times (fix48-fix56) was fix48's armed
+			// SECOND same-frame accumulate on top of func()'s own - fix58
+			// removed that (sun is now published-only, accumulated exactly
+			// once by func()). This dispatch is back to the fix46 shape
+			// that rendered slot0 fine: no armed walk, no pre-render
+			// accumulate, no warmup - just Render(idx), same as point
+			// lights. fix51's camDflt gate below is the render-safety
+			// fence, fix49's focus scrub runs for every light.
 			// fix47 (2026-09-09): post-resume freeze. The first dispatch
 			// after a world-switch gate (01:20:40 session) rendered lights
 			// whose engine Accumulate produced NO casters that frame
@@ -2216,43 +2225,11 @@ namespace ShadowLimitFixNS::P1
 						static_cast<int32_t>(drtd.shadowmapDescriptors[0].shadowmapIndex),
 					drtd.drawFocusShadows ? 1 : 0);
 			}
-			// fix56 (2026-09-09): sun warmup skip - the resumed dispatch
-			// skips the sun for 32 live frames (point lights still render)
-			// so the engine's shadow-pass context rebuilds before the
-			// directional cascade render. Logs every skip; see the arm
-			// comment above for the two-way readout.
-			if (s.light->GetIsDirectionalLight() && s_sunWarmup > 0) {
-				s_sunWarmup--;
-				if (diagLights || (s_sunWarmup & 0x7u) == 0)
-					SKSE::log::info("[SLF] fix56 sun warmup skip #{} ({} warmup frames left, geom={})",
-						s.slot, s_sunWarmup, static_cast<std::uint32_t>(s.light->geomList.size()));
-				continue;
-			}
-			// fix55 (2026-09-09): CS SetupSunLight alignment, BARE accumulate.
-			// fix54's armed re-collection (SetCurrentCullLight + heal-attach)
-			// is a CULL-ONLY mode for point lights - the 12:04 session proved
-			// it never fills the engine accumulator (post-accum sceneAccum=0,
-			// geom unchanged 2016->2016): the sun's geomList was already full,
-			// so the armed walk was noise AND the accumulator entry that
-			// BSShadowLight::Render's geometry loop walks stayed empty. Five
-			// sun-render hangs (01:46 / 01:59 / 11:04:59 / 11:41:10 /
-			// 12:04:45) all rendered with sceneAccum=0. CS accumulates the
-			// sun bare (no armed flags) to the engine's REAL global accum
-			// slot every frame right before Render and renders it fine.
-			// Mirror that exact call shape (directional only - point lights
-			// keep the proven path).
-			if (s.light->GetIsDirectionalLight()) {
-				static std::uint32_t s_fix55Log = 0;
-				if (diagLights || (s_fix55Log++ & 0x1Fu) == 0)
-					SKSE::log::info("[SLF] fix55 sun pre-render bare real-slot accumulate");
-				ShadowLimitFixNS::P1::SunBareAccumulateRealSlot();
-				if (diagLights) {
-					auto& a55 = s.light->GetRuntimeData();
-					SKSE::log::info("[SLF] fix55 sun post-accum: sceneAccum={} geom={}",
-						static_cast<std::uint32_t>(a55.sceneAccumArray.size()),
-						static_cast<std::uint32_t>(s.light->geomList.size()));
-				}
-			}
+			// fix59: the fix56 warmup skip and fix55 pre-render bare
+			// accumulate blocks were REMOVED here - both addressed sun
+			// states that fix58 eliminated (armed double-accumulate) and
+			// fix46's proven shape needs neither (sun accumulated exactly
+			// once by func(), dispatch just draws). s_sunWarmup stays 0.
 			s.light->Render(idx);   // engine virtual: draws this light's shadows
 			if (diagLights)
 				SKSE::log::info("[SLF] fix45 post-render #{} slot={} ok", i, s.slot);
