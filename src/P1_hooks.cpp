@@ -1984,9 +1984,12 @@ namespace ShadowLimitFixNS::P1
 			// rendering) and log every skip, so the log shows whether the
 			// sun survives a warm start (fix = outage-context) or still
 			// hangs on frame kLiveFrames+1 (fix = sun render path itself).
-			constexpr std::uint32_t kSunWarmupFrames = 32;
-			s_sunWarmup = kSunWarmupFrames;
-			SKSE::log::info("[SLF] fix56 sun warmup armed: {} live frames before sun renders", kSunWarmupFrames);
+			// fix57 (2026-09-09): sun warmup REMOVED. The fix56 32-frame
+			// warmup did not help - the 7th hang came on frame 33
+			// (12:32:10.800, 32 clean warmup frames at ~53fps first) - and
+			// the sun no longer renders through this dispatch at all
+			// (fix57 dir skip above). s_sunWarmup stays 0 and the warmup
+			// skip block below is unreachable for directional lights.
 		}
 		if (diagLights)
 			SKSE::log::info("[SLF] fix45 diag: dispatch n={}", n);
@@ -2060,6 +2063,34 @@ namespace ShadowLimitFixNS::P1
 			auto& s = ShadowLimitFixNS::P1::g_scheduledShadowLights[i];
 			if (!s.light)
 				continue;
+			// fix57 (2026-09-09): the sun does NOT render through this
+			// manual dispatch. Seven consecutive sun-render hangs
+			// (01:46/01:59/11:04:59/11:41:10/12:04:45/12:16:43/12:32:10)
+			// all died on Render(sun) inside this loop. fix56's 32-frame
+			// warmup PROVED the outage-context theory wrong: 12:32:10.2-
+			// 10.8 ran 32 clean warmup frames at ~53 fps (game alive,
+			// point-light shadow draws healthy), then frame 33
+			// Render(sun) hung instantly (last log row 12:32:10.800
+			// "fix55 sun pre-render bare real-slot accumulate", no
+			// SelectDSB row, no post-render). fix54/55 already proved the
+			// accumulate shape is irrelevant (armed AND bare accumulate
+			// both leave sceneAccum=0). fix46 and earlier rendered the sun
+			// FINE because it was NOT in this list - "dir (sun) skipped:
+			// not in this list" appears three times in the fix46-era
+			// dispatch (P1_hooks.cpp), and the 00:50 session under the
+			// SAME rax=0 + manual-dispatch architecture rendered point
+			// lights while the sun stayed healthy: the engine renders the
+			// directional cascade itself and that path survives our
+			// rax=0 stop. fix48 (01:38) dragged the sun into this list to
+			// paper over fix47's sceneAccum==0 skip bug - wrong tool:
+			// fix51 already fixed the real bug with the camDflt gate.
+			// Restore the fix46 division of labor: engine owns the sun
+			// cascade, this dispatch owns point lights only.
+			if (s.light->GetIsDirectionalLight()) {
+				if (diagLights)
+					SKSE::log::info("[SLF] fix57 sun skip: engine-owned cascade (not in manual dispatch) slot={}", s.slot);
+				continue;
+			}
 			// fix47 (2026-09-09): post-resume freeze. The first dispatch
 			// after a world-switch gate (01:20:40 session) rendered lights
 			// whose engine Accumulate produced NO casters that frame
