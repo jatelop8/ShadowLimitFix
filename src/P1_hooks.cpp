@@ -3282,6 +3282,169 @@ namespace ShadowLimitFixNS::P1
 		SKSE::log::info("[SLF][B4c] installed (RET at +5) - engine per-surface batch = SLF scheduled prefix");
 	}
 
+	// ---------------------------------------------------------------------
+	// fix109 (2026-09-10): "all lamps stay lit" per-surface injection.
+	//
+	// Root cause (disasm-verified): the engine's CalculateActiveNonShadow
+	// CasterLights (ID 100997/107784, RVA 0x14FCF80) does NO distance cull
+	// itself - it only copies lightData->lights (BSShaderPropertyLightData,
+	// the per-surface accumulation) into the output lights[]. The distance
+	// cull happened EARLIER, when the engine accumulated lightData->lights,
+	// so by the time this function runs distant lamps are already absent
+	// (cb2 lights=0 on ~60-70% of surfaces; activeLights stays ==2).
+	//
+	// fix34/38 (writing the light-LOD fade cache / lodDimmer) therefore can
+	// never resurrect a lamp dropped from lightData->lights. The fix is to
+	// source the batch from the engine's OWN active-light lists
+	// (activeShadowLights, distance-sorted; activeLights) instead of the
+	// distance-culled lightData->lights - the same approach CS's
+	// Hook_CalculateActiveLightsForSurface takes (ShadowEngineHooks.cpp:732).
+	// GameIsLightAffectingSurface (98902/105550) keeps the facing test but
+	// has no distance test (disasm: only light[+0x61] flag + shaderProp
+	// [+0x38] flag bits), so lamps stay lit at any distance.
+	//
+	// Diffuse-only "lamps stay lit": the engine still renders its own <=8
+	// shadow maps; we only widen which lamps illuminate a surface.
+	static bool GameIsLightAffectingSurface(RE::BSLightingShaderProperty* a_prop, RE::BSLight* a_light)
+	{
+		using F = bool (*)(RE::BSLightingShaderProperty*, RE::BSLight*);
+		static REL::Relocation<F> func{ REL::RelocationID(98902, 105550) };
+		return func(a_prop, a_light);
+	}
+
+	static void Hook_CalculateActiveLightsForSurface_AllLit(CONTEXT& ctx)
+	{
+		auto** lights = reinterpret_cast<RE::BSLight**>(ctx.Rdx);
+		auto*  shadowCount = reinterpret_cast<int*>(ctx.R9);
+		const int maxCount = static_cast<int>(ctx.R8);
+		auto* lightData = reinterpret_cast<RE::BSShaderPropertyLightData*>(ctx.Rcx);
+		const auto ssnPtr = *reinterpret_cast<void**>(ctx.Rsp + 0x28);
+		const auto shaderProp = *reinterpret_cast<void**>(ctx.Rsp + 0x30);
+		const auto addShadow = *reinterpret_cast<const bool*>(ctx.Rsp + 0x38);
+		const auto useShadowSunPtr = *reinterpret_cast<void**>(ctx.Rsp + 0x40);
+
+		if (!lights || maxCount <= 0) {
+			ctx.Rax = 0;
+			if (shadowCount)
+				*shadowCount = 0;
+			return;
+		}
+
+		auto* ssn = ssnPtr ? static_cast<RE::ShadowSceneNode*>(ssnPtr) : nullptr;
+		auto* shader = shaderProp ? static_cast<RE::BSLightingShaderProperty*>(shaderProp) : nullptr;
+
+		// Sun/cloud resolution (vanilla contract: lights[0] always written).
+		RE::BSLight* sun = nullptr;
+		if (ssn && shader) {
+			const bool useShadowSun = useShadowSunPtr && *static_cast<const bool*>(useShadowSunPtr);
+			sun = useShadowSun ? ssn->GetRuntimeData().sunShadowDirLight : ssn->GetRuntimeData().sunLight;
+			if (shader->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kCloudLOD))
+				sun = ssn->GetRuntimeData().cloudLight;
+		}
+
+		*shadowCount = 0;
+		lights[0] = sun;
+		int added = 1;
+
+		auto isDup = [&](RE::BSLight* a_l) {
+			for (int i = 0; i < added; i++)
+				if (lights[i] == a_l)
+					return true;
+			return false;
+		};
+
+		// Step 1: active shadow lights (engine distance-sorted) - bypasses
+		// the lightData->lights distance cull so lamps stay lit at range.
+		if (addShadow && ssn) {
+			for (auto& sp : ssn->GetRuntimeData().activeShadowLights) {
+				if (added >= maxCount)
+					break;
+				auto* sl = sp.get();
+				if (!sl)
+					continue;
+				auto* l = static_cast<RE::BSLight*>(sl);
+				if (l == sun)
+					continue;
+				if (shader && !GameIsLightAffectingSurface(shader, l))
+					continue;
+				if (isDup(l))
+					continue;
+				lights[added++] = l;
+				(*shadowCount)++;
+			}
+		}
+
+		// Step 2: active non-shadow lights.
+		if (ssn) {
+			for (auto& sp : ssn->GetRuntimeData().activeLights) {
+				if (added >= maxCount)
+					break;
+				auto* l = sp.get();
+				if (!l || l == sun)
+					continue;
+				if (l->light && l->light->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+					continue;
+				if (isDup(l))
+					continue;
+				lights[added++] = l;
+			}
+		}
+
+		// Step 3: lightData->lights (vanilla accumulation) as a fallback.
+		if (added < maxCount && lightData) {
+			for (auto* l : lightData->lights) {
+				if (added >= maxCount)
+					break;
+				if (!l || l == sun)
+					continue;
+				if (l->frustrumCull == 0xFFu)
+					continue;
+				if (l->light && l->light->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+					continue;
+				if (isDup(l))
+					continue;
+				lights[added++] = l;
+			}
+		}
+
+		ctx.Rax = static_cast<std::uint64_t>(added);
+
+		// Throttled diagnostic (every 2048th call).
+		static std::uint32_t s_calls = 0;
+		if ((s_calls++ & 0x7FFu) == 0) {
+			SKSE::log::info(
+				"[SLF][fix109] surface batch: max={} added={} shadow*={} addShadow={} "
+				"activeShadow={} activeNonShadow={} lightData={} sun={:x}",
+				maxCount, added, shadowCount ? *shadowCount : -1, addShadow ? 1 : 0,
+				ssn ? ssn->GetRuntimeData().activeShadowLights.size() : 0,
+				ssn ? ssn->GetRuntimeData().activeLights.size() : 0,
+				lightData ? lightData->lights.size() : 0,
+				reinterpret_cast<std::uintptr_t>(sun));
+		}
+	}
+
+	void InstallAllLitLightsHook()
+	{
+		if (REL::Module::GetRuntime() == REL::Module::Runtime::VR) {
+			SKSE::log::info("[SLF][fix109] install skipped (VR - different arg layout)");
+			return;
+		}
+		REL::RelocationID uid(100997, 107784);
+		const std::uintptr_t addr = uid.address();
+		if (!addr) {
+			SKSE::log::error("[SLF][fix109] FAILED: CalculateActiveNonShadowCasterLights address is null");
+			return;
+		}
+		SKSE::log::info("[SLF][fix109] installing all-lit surface injection @ {:016X}", addr);
+		if (!SKSE::stl::install_context_hook(addr, 5, Hook_CalculateActiveLightsForSurface_AllLit)) {
+			SKSE::log::error("[SLF][fix109] FAILED install_context_hook @ {:016X}", addr);
+			return;
+		}
+		const uint8_t ret = 0xC3;
+		REL::safe_write(addr + 5, &ret, 1);
+		SKSE::log::info("[SLF][fix109] installed - surface lamps sourced from active lists (distance cull bypassed)");
+	}
+
 	// B4c-v3 cb2 readback probe (ShaderReplace.cpp): samples the PS slot-2
 	// cbuffer via a staging copy. B4d calls it at 107300 (SetupGeometry)
 	// entry to learn whether the cb2 batch is ALREADY filled before the

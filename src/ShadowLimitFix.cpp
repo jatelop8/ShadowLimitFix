@@ -24,6 +24,7 @@ namespace ShadowLimitFixNS
 		void InstallShaderHooks();
 		void InstallSurfaceLightsHook();
 		void InstallSceneLightsRewriteHook();
+		void InstallAllLitLightsHook();
 	}
 
 	void Install()
@@ -100,6 +101,12 @@ namespace ShadowLimitFixNS
 			// so the engine's fixed 8-slot dispatch never touches the
 			// 127-slice array (v8-exp2 crash site avoided).
 			P1::InstallScheduler();
+			// fix109 (2026-09-10): per-surface "all lamps stay lit" injection.
+			// Data source = engine active light lists (distance-sorted), NOT the
+			// distance-culled lightData->lights. Lamps illuminate surfaces at any
+			// range (no walk-up pop-in); the engine still renders its own <=8
+			// shadow maps and the sun is untouched (fix106 engine-native).
+			P1::InstallAllLitLightsHook();
 			// Material-pass sampling probe (22:3x flicker diagnosis): logs
 			// t103 view range + canvas content + engine shadow globals at
 			// the t14-bind sampling moment. Read-only; strip anytime.
