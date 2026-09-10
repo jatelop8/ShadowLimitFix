@@ -14,6 +14,9 @@
 namespace ShadowLimitFixNS
 {
 	void Install();
+	// Self-owned shadow atlas (ShadowAtlas.cpp). Created at kDataLoaded where
+	// the D3D11 device exists (PostLoad's forwarder is still null).
+	void InstallShadowAtlas();
 #if ENABLE_P1B
 	// fix9 (23:3x): material-pass probe moved here from Install() (which runs
 	// at kPostLoad when BSGraphics::Renderer::GetRuntimeData().context is
@@ -126,6 +129,11 @@ namespace
 			case SKSE::MessagingInterface::kDataLoaded:
 				TraceLoad("DataLoaded");
 				SKSE::log::info("[SLF] DataLoaded");
+				// fix108 (2026-09-10): the self-owned shadow atlas needs the D3D11
+				// device, which exists by kDataLoaded (PostLoad's forwarder is
+				// still null). Step 1 = create the texture + tiles only; no
+				// render/shader wiring yet.
+				ShadowLimitFixNS::InstallShadowAtlas();
 #if ENABLE_P1B
 				// fix18 (2026-09-04): material-pass probe DISABLED. It is the
 				// ONLY SLF code that runs on the render worker thread

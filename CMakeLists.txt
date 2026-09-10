@@ -24,6 +24,7 @@ add_library(${PROJECT_NAME} SHARED
     src/P1_hooks.cpp
     src/Scheduler.cpp
     src/ShaderReplace.cpp
+    src/ShadowAtlas.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
