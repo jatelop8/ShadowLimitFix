@@ -908,8 +908,12 @@ namespace ShadowLimitFixNS::P1
 	static void ForceLightsAlwaysLit()
 	{
 		static REL::Relocation<float*> p{ REL::RelocationID(527669, 414583) };
-		if (p.get() && *p < 1.0e8f)
-			*p = 1.0e8f;  // fade-end squared -> ~10k units, effectively never fades
+		// fix34b (2026-09-10): the original condition '*p < 1.0e8f' was inverted
+		// against the engine's 9.4e8 default (30720^2) so it NEVER fired, and
+		// the 1e8 target (10000 units) was SHORTER than the default. Write
+		// unconditionally to 1e12 (~1e6 units) so lamps truly never fade.
+		if (p.get())
+			*p = 1.0e12f;
 	}
 	// fix38 (2026-09-07): DIM probe VERDICT - lodDimmer is a binary 0/1
 	// switch (probe: 0.000->1.000 at dist ~330/455). The engine zeros it in
