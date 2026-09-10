@@ -80,15 +80,16 @@ namespace ShadowLimitFixNS
 			// readback/manual-render off. Engine scheduling+dispatch+material
 			// rendering 100% vanilla. If stable -> P1b arrays proven safe and
 			// the killer was P1c-3's hot-path D3D writes.
-			// fix64 step2 (2026-09-09): 127 -> 30. Hypothesis: the sun's
-			// cascade render AV (WER: faulting RIP outside all modules =
-			// call through a corrupted pointer) comes from the engine's
-			// shadow state machine overflowing on SLF's 127-slice
-			// expansion - CS ships ShadowLightCount=16 default and renders
-			// the sun fine under its full engine-facing expansion. 30
-			// slices still covers every scheduled light (21-24) while
-			// staying inside the envelope the engine adapts to.
-			P1::InstallExtendedBuffers(30);
+			// fix106 (2026-09-10): NO slice expansion. The 8->127 slice
+			// expansion (InstallExtendedBuffers) is what made the engine's
+			// native dispatch crash (14CC1A2 null-call) and forced the rax=0
+			// tip stop that killed the sun. Restore the ENGINE-native shadow
+			// pipeline (sun + engine-budget 8 lights, engine dispatch runs)
+			// and keep SLF to the lamp-brightness overrides only. Multi-light
+			// (>8) shadows need a CS-style self-owned atlas later - NOT the
+			// engine-array expansion (that path is structurally dead for the
+			// sun).
+			// P1::InstallExtendedBuffers(30);
 			// v10-phase1 (2026-09-03): scheduler restored - thunk runs the
 			// ORIGINAL engine scheduler (func) then a register pass that
 			// publishes the engine's shadowLightsAccum into our

@@ -454,7 +454,7 @@ namespace ShadowLimitFixNS::P1
 // to disjoint slices (SLF only slot>=8, engine only accumulator 0..7),
 // or (b) single dispatcher that renders sun (engine) AND point lights
 // (ours) by short-circuiting per-light in the hook.
-#define SLF_SKIP_VANILLA_DISPATCH 1
+#define SLF_SKIP_VANILLA_DISPATCH 0
 
 // P1b full mode - real depth-buffer expansion (>8 slices) + render-loop hook.
 // slice=8 mechanism verified in-game (00:37) -> enable full mode for slice=9.
@@ -487,7 +487,7 @@ namespace ShadowLimitFixNS::P1
 // engine-dispatch = KNOWN FATAL (crash-2026-09-04-16-41-43, see note on
 // SLF_SKIP_VANILLA_DISPATCH). ROLLED BACK: manual dispatch is the ONLY
 // safe producer for the 127-slice array. 1.
-#define SLF_MANUAL_RENDER 1
+#define SLF_MANUAL_RENDER 0
 
 // v10-phase2 gate (2026-09-03 17:2x FLIPPED - phase1 + phase1c both passed
 // in-game: phase1 indoor test 16:55 = 4/4 lights rendered with the CS

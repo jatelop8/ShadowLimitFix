@@ -2110,7 +2110,13 @@ namespace ShadowLimitFixNS::P1
 		const auto s0 = clk::now();
 		func();
 		const auto s1 = clk::now();
-		AccumulateSunCasters();
+		// fix106 (2026-09-10): NO AccumulateSunCasters here. The engine's own
+		// func() already accumulated the sun (its cascade architecture lives in
+		// the engine's ResetCalculatedShadowCasterLights + UpdateCamera, NOT in
+		// anything SLF can re-accumulate). A second armed accumulate disturbs
+		// the sun's sceneAccumArray/cullingProcessArray state. With the slice
+		// expansion removed and the engine dispatch running (SLF_SKIP_VANILLA
+		// _DISPATCH=0), the sun renders engine-native - SLF must not touch it.
 #if SLF_ALWAYS_LIT
 		// fix34: lamps never fade (see macro comment).
 		ForceLightsAlwaysLit();
@@ -2131,21 +2137,10 @@ namespace ShadowLimitFixNS::P1
 		// scheduler filled the accumulator (see macro comment).
 		ShadowPinFixedLights();
 #endif
-		// v10-phase1: publish the engine's accumulator list for our
-		// self-dispatch (rax=0 + SLF_MANUAL_RENDER pair). The full v6.4
-		// roster scheduler (ScheduleShadowCasters above) returns in phase 2
-		// as a post-original pass over lights the engine did NOT slot.
-		RegisterEngineAccumLights();
-#if SLF_P2_EXTEND
-		// v10-phase2: append SLF-managed lights at slices 8..29 (pure SLF
-		// path, no engine accumulator interaction). Flip the gate after
-		// phase 1 proves the self-dispatch combo stable in-game.
-		ExtendScheduledLights();
-#endif
-		// fix15: publish the N-light data channel AFTER the final scheduled
-		// list exists (engine accum + extension). g_shadowLightCount feeds
-		// the fix12 swap gate; g_shadowLights feeds the b13 cbuffer.
-		PublishShadowLightDataChannel();
+		// fix106 (2026-09-10): NO Register/Extend/Publish. Those are the
+		// self-dispatch (rax=0 + SLF_MANUAL_RENDER) machinery; with the
+		// engine dispatch running they would only write g_scheduledShadowLights
+		// nobody reads and disturb engine light state via the armed accumulate.
 		const auto s2 = clk::now();
 		static std::uint64_t s_fNs = 0, s_sNs = 0;
 		static std::uint32_t s_n = 0;
