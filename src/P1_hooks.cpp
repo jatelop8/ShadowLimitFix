@@ -3370,15 +3370,9 @@ namespace ShadowLimitFixNS::P1
 			return false;
 		};
 
-		// Step 1: active shadow lights (engine distance-sorted) - bypasses
-		// the lightData->lights distance cull so lamps stay lit at range.
-		// fix109 v2 (2026-09-12): cap at the vanilla 4-shadow clamp
-		// (cb2[29].y = min(shadow,4)). Injecting every activeShadowLights
-		// entry (28+) filled the whole batch and starved the non-shadow
-		// lights - QuickLight's handheld omni light lives in activeLights,
-		// so it never got a slot and the player's quick-light stayed dark.
-		// Cap shadow lights at 4 and leave the rest of the batch for the
-		// non-shadow lights (Step 2).
+		// Step 1: the 4 nearest shadow-casting lamps (vanilla shadow clamp
+		// cb2[29].y = min(shadow,4)). These get a shadow test; every later
+		// entry in the batch is diffuse-only.
 		if (isLightingSurface && addShadow && ssn) {
 			for (auto& sp : ssn->GetRuntimeData().activeShadowLights) {
 				if (added >= maxCount || *shadowCount >= 4)
@@ -3398,7 +3392,12 @@ namespace ShadowLimitFixNS::P1
 			}
 		}
 
-		// Step 2: active non-shadow lights.
+		// Step 2: the nearest non-shadow light (QuickLight's handheld omni
+		// light lives here). Inject ONE only so the diffuse slots stay
+		// available for the remaining shadow lamps in Step 3. The engine
+		// consumes the first 7 slots (sun + 4 shadow + 1 non-shadow + 1
+		// extra shadow), so dropping extra non-shadow lights here keeps the
+		// shadow lamps lit instead of starving them.
 		if (isLightingSurface && ssn) {
 			for (auto& sp : ssn->GetRuntimeData().activeLights) {
 				if (added >= maxCount)
@@ -3411,10 +3410,31 @@ namespace ShadowLimitFixNS::P1
 				if (isDup(l))
 					continue;
 				lights[added++] = l;
+				break;  // nearest non-shadow light only
 			}
 		}
 
-		// Step 3: lightData->lights (vanilla accumulation) as a fallback.
+		// Step 3: remaining shadow lamps, diffuse-only (they still light the
+		// surface; only the first 4 get a shadow test). This keeps distant
+		// lamps lit at any range instead of starving them behind non-shadow
+		// lights.
+		if (isLightingSurface && addShadow && ssn) {
+			for (auto& sp : ssn->GetRuntimeData().activeShadowLights) {
+				if (added >= maxCount)
+					break;
+				auto* sl = sp.get();
+				if (!sl)
+					continue;
+				auto* l = static_cast<RE::BSLight*>(sl);
+				if (l == sun)
+					continue;
+				if (isDup(l))
+					continue;  // skip the 4 already injected in Step 1
+				lights[added++] = l;
+			}
+		}
+
+		// Step 4: lightData->lights (vanilla accumulation) as a final fallback.
 		if (added < maxCount && lightData) {
 			for (auto* l : lightData->lights) {
 				if (added >= maxCount)
