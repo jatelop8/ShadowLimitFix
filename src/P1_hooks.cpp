@@ -3283,34 +3283,12 @@ namespace ShadowLimitFixNS::P1
 	}
 
 	// ---------------------------------------------------------------------
-	// fix109 (2026-09-10): "all lamps stay lit" per-surface injection.
-	//
-	// Root cause (disasm-verified): the engine's CalculateActiveNonShadow
-	// CasterLights (ID 100997/107784, RVA 0x14FCF80) does NO distance cull
-	// itself - it only copies lightData->lights (BSShaderPropertyLightData,
-	// the per-surface accumulation) into the output lights[]. The distance
-	// cull happened EARLIER, when the engine accumulated lightData->lights,
-	// so by the time this function runs distant lamps are already absent
-	// (cb2 lights=0 on ~60-70% of surfaces; activeLights stays ==2).
-	//
-	// fix34/38 (writing the light-LOD fade cache / lodDimmer) therefore can
-	// never resurrect a lamp dropped from lightData->lights. The fix is to
-	// source the batch from the engine's OWN active-light lists
-	// (activeShadowLights, distance-sorted; activeLights) instead of the
-	// distance-culled lightData->lights - the same approach CS's
-	// Hook_CalculateActiveLightsForSurface takes (ShadowEngineHooks.cpp:732).
-	// GameIsLightAffectingSurface (98902/105550) keeps the facing test but
-	// has no distance test (disasm: only light[+0x61] flag + shaderProp
-	// [+0x38] flag bits), so lamps stay lit at any distance.
-	//
-	// Diffuse-only "lamps stay lit": the engine still renders its own <=8
-	// shadow maps; we only widen which lamps illuminate a surface.
-	static bool GameIsLightAffectingSurface(RE::BSLightingShaderProperty* a_prop, RE::BSLight* a_light)
-	{
-		using F = bool (*)(RE::BSLightingShaderProperty*, RE::BSLight*);
-		static REL::Relocation<F> func{ REL::RelocationID(98902, 105550) };
-		return func(a_prop, a_light);
-	}
+	// fix109 (v4, 2026-09-12): VANILLA per-surface batch. The v1-v3 "all-lit"
+	// injection from the global active-light lists is reverted (see the v4
+	// note inside the hook): it lit the wrong surfaces and starved the
+	// non-shadow lights (QuickLight). The hook now reproduces the engine's
+	// own shadowLightsAccum + lightData->lights copy, the correct per-surface
+	// (facing + radius-culled) light set for non-overlapping lamp radii.
 
 	static void Hook_CalculateActiveLightsForSurface_AllLit(CONTEXT& ctx)
 	{
@@ -3333,22 +3311,17 @@ namespace ShadowLimitFixNS::P1
 		auto* ssn = ssnPtr ? static_cast<RE::ShadowSceneNode*>(ssnPtr) : nullptr;
 		auto* shader = shaderProp ? static_cast<RE::BSLightingShaderProperty*>(shaderProp) : nullptr;
 
-		// fix109 crash guard (2026-09-12): only BSLightingShaderProperty
-		// surfaces get the all-lit injection. Effect surfaces
-		// (BSEffectShaderProperty, e.g. NAT\Mist.nif fog) share this call but
-		// their downstream light consumer reads a DIFFERENT table layout; a
-		// lighting-layout table crashed it with a null light deref
-		// (crash 09-11 15:11, RBX=0 @ SkyrimSE+14EAFFA). Keep them on the
-		// vanilla lightData->lights path.
-		bool isLightingSurface = false;
-		if (shaderProp) {
-			auto* sp = static_cast<RE::BSShaderProperty*>(shaderProp);
-			if (const auto* rtti = sp->GetRTTI()) {
-				if (const char* nm = rtti->GetName()) {
-					isLightingSurface = (std::strstr(nm, "LightingShaderProperty") != nullptr);
-				}
-			}
-		}
+		// fix109 v4 (2026-09-12): RESTORE the vanilla per-surface batch. The
+		// v1-v3 "all-lit" injection sourced the batch from the GLOBAL active
+		// light lists (activeShadowLights/activeLights, 28+ entries), which
+		// pushed the surface's OWN radius-culled lights out of the 7-slot cb2
+		// -> lamps lit the wrong surfaces, and non-shadow lights (QuickLight)
+		// starved. The user controls each lamp's radius so ranges do NOT
+		// overlap; the engine's per-surface accumulation (shadowLightsAccum +
+		// lightData->lights) is already correct for that case. Restore it
+		// verbatim: sun + shadowLightsAccum + lightData->lights diffuse tail.
+		// Effect surfaces take the same vanilla shape (no crash, no RTTI
+		// special-casing).
 
 		// Sun/cloud resolution (vanilla contract: lights[0] always written).
 		RE::BSLight* sun = nullptr;
@@ -3363,78 +3336,21 @@ namespace ShadowLimitFixNS::P1
 		lights[0] = sun;
 		int added = 1;
 
-		auto isDup = [&](RE::BSLight* a_l) {
-			for (int i = 0; i < added; i++)
-				if (lights[i] == a_l)
-					return true;
-			return false;
-		};
-
-		// Step 1: the 4 nearest shadow-casting lamps (vanilla shadow clamp
-		// cb2[29].y = min(shadow,4)). These get a shadow test; every later
-		// entry in the batch is diffuse-only.
-		if (isLightingSurface && addShadow && ssn) {
-			for (auto& sp : ssn->GetRuntimeData().activeShadowLights) {
-				if (added >= maxCount || *shadowCount >= 4)
+		// Shadow point lights: the engine's per-surface shadow accumulation
+		// (facing + radius culled - exactly the lamps that affect THIS surface).
+		if (addShadow && ssn) {
+			for (auto* sl : ssn->GetRuntimeData().shadowLightsAccum) {
+				if (!sl || added >= maxCount)
 					break;
-				auto* sl = sp.get();
-				if (!sl)
-					continue;
 				auto* l = static_cast<RE::BSLight*>(sl);
 				if (l == sun)
-					continue;
-				if (shader && !GameIsLightAffectingSurface(shader, l))
-					continue;
-				if (isDup(l))
 					continue;
 				lights[added++] = l;
 				(*shadowCount)++;
 			}
 		}
 
-		// Step 2: the nearest non-shadow light (QuickLight's handheld omni
-		// light lives here). Inject ONE only so the diffuse slots stay
-		// available for the remaining shadow lamps in Step 3. The engine
-		// consumes the first 7 slots (sun + 4 shadow + 1 non-shadow + 1
-		// extra shadow), so dropping extra non-shadow lights here keeps the
-		// shadow lamps lit instead of starving them.
-		if (isLightingSurface && ssn) {
-			for (auto& sp : ssn->GetRuntimeData().activeLights) {
-				if (added >= maxCount)
-					break;
-				auto* l = sp.get();
-				if (!l || l == sun)
-					continue;
-				if (l->light && l->light->GetFlags().any(RE::NiAVObject::Flag::kHidden))
-					continue;
-				if (isDup(l))
-					continue;
-				lights[added++] = l;
-				break;  // nearest non-shadow light only
-			}
-		}
-
-		// Step 3: remaining shadow lamps, diffuse-only (they still light the
-		// surface; only the first 4 get a shadow test). This keeps distant
-		// lamps lit at any range instead of starving them behind non-shadow
-		// lights.
-		if (isLightingSurface && addShadow && ssn) {
-			for (auto& sp : ssn->GetRuntimeData().activeShadowLights) {
-				if (added >= maxCount)
-					break;
-				auto* sl = sp.get();
-				if (!sl)
-					continue;
-				auto* l = static_cast<RE::BSLight*>(sl);
-				if (l == sun)
-					continue;
-				if (isDup(l))
-					continue;  // skip the 4 already injected in Step 1
-				lights[added++] = l;
-			}
-		}
-
-		// Step 4: lightData->lights (vanilla accumulation) as a final fallback.
+		// Diffuse tail: the engine's per-surface light list (vanilla loop).
 		if (added < maxCount && lightData) {
 			for (auto* l : lightData->lights) {
 				if (added >= maxCount)
@@ -3445,7 +3361,10 @@ namespace ShadowLimitFixNS::P1
 					continue;
 				if (l->light && l->light->GetFlags().any(RE::NiAVObject::Flag::kHidden))
 					continue;
-				if (isDup(l))
+				bool dup = false;
+				for (int i = 0; i < added && !dup; i++)
+					dup = (lights[i] == l);
+				if (dup)
 					continue;
 				lights[added++] = l;
 			}
