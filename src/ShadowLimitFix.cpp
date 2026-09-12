@@ -106,6 +106,12 @@ namespace ShadowLimitFixNS
 			// distance-culled lightData->lights. Lamps illuminate surfaces at any
 			// range (no walk-up pop-in); the engine still renders its own <=8
 			// shadow maps and the sun is untouched (fix106 engine-native).
+			//
+			// RE-ENABLED (2026-09-12) behind a BSLightingShaderProperty type
+			// guard: the 09-11 15:11 crash (NAT\Mist.nif BSEffectShaderProperty
+			// deref'd a null light @ SkyrimSE+14EAFFA) was fixed by gating the
+			// active-list injection on an RTTI name check in the hook; Effect
+			// surfaces keep the vanilla lightData->lights path.
 			P1::InstallAllLitLightsHook();
 			// Material-pass sampling probe (22:3x flicker diagnosis): logs
 			// t103 view range + canvas content + engine shadow globals at

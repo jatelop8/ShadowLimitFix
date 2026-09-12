@@ -280,9 +280,11 @@ namespace ShadowLimitFixNS::P1
 		}
 		a_ctx->Unmap(g_zeroLRBuf, 0);
 		static std::uint32_t lc = 0;
+#if SLF_DIAG_LOG
 		if ((lc++ & 0xFFu) == 0)
 			SKSE::log::info("[SLF-B][b4a] LightRec filled: {} lights (first: type={} en={} slice={})",
 				count, static_cast<int>(fType), static_cast<int>(fEn), static_cast<int>(fSlice));
+#endif
 	}
 
 	static std::uint64_t Fnv1a(const std::uint8_t* p, size_t n)
@@ -530,8 +532,10 @@ namespace ShadowLimitFixNS::P1
 				static_cast<unsigned>(sd.AddressW));
 			sm15->Release();
 		}
+#if SLF_DIAG_LOG
 		SKSE::log::info("[SLF-B][probe] PS={} patched={} t102:[{}] t103:[{}] b13:[{}] s15:[{}]",
 			static_cast<void*>(pobj), isPatched ? 1 : 0, d102, d103, d13, d15);
+#endif
 	}
 
 	// B4c-v3 (2026-09-05): DRAW-time cb2 readback - the decisive alignment
@@ -608,12 +612,14 @@ namespace ShadowLimitFixNS::P1
 		const float* g0 = ShadowLimitFixNS::P1::g_shadowLights[0].pos;
 		const float* g1 = ShadowLimitFixNS::P1::g_shadowLights[1].pos;
 		const float* g2 = ShadowLimitFixNS::P1::g_shadowLights[2].pos;
+#if SLF_DIAG_LOG
 		SKSE::log::info("[SLF][B4c][draw] nSch={} cb2[29]=({:.0f},{:.0f}) chmap=({:.0f},{:.0f},{:.0f},{:.0f}) "
 			"cb2[0..2]=({:.1f},{:.1f},{:.1f})r{:.1f}|({:.1f},{:.1f},{:.1f})r{:.1f}|({:.1f},{:.1f},{:.1f})r{:.1f} "
 			"sched[0..2]=({:.1f},{:.1f},{:.1f})|({:.1f},{:.1f},{:.1f})|({:.1f},{:.1f},{:.1f})",
 			nSch, c29[0], c29[1], c2[0], c2[1], c2[2], c2[3],
 			l0[0], l0[1], l0[2], l0[3], l1[0], l1[1], l1[2], l1[3], l2[0], l2[1], l2[2], l2[3],
 			g0[0], g0[1], g0[2], g1[0], g1[1], g1[2], g2[0], g2[1], g2[2]);
+#endif
 #if SLF_B5_MATCH_PROBE
 		// B5 pre-flight v3 (2026-09-06): DUAL-MODE position-match probe.
 		// History: v1 (09-05) matched cb2[15+i] against g_shadowLights[].pos
@@ -714,11 +720,13 @@ namespace ShadowLimitFixNS::P1
 				avgV /= nShdI;
 			}
 			const float* c0 = f + 15 * 4;
+#if SLF_DIAG_LOG
 			SKSE::log::info("[SLF][B5][dual] cam={} nShd={}/{} c0=({:.1f},{:.1f},{:.1f})r{:.1f} "
 				"W:m{} av{:.1f}u s0:lr#{}d{:.1f} | V:m{} av{:.1f}u s0:lr#{}d{:.1f} lr={}",
 				haveCam ? 1 : 0, nShadow, nAll,
 				c0[0], c0[1], c0[2], c0[3],
 				mW, avgW, bKW, dW0, mV, avgV, bKV, dV0, lrCount);
+#endif
 		}
 #endif  // SLF_B5_MATCH_PROBE
 		a_ctx->Unmap(staging, 0);
@@ -785,9 +793,11 @@ namespace ShadowLimitFixNS::P1
 				a_ctx->PSSetSamplers(15, 1, &g_b2bSampler);
 		}
 		static std::uint32_t zc = 0;
+#if SLF_DIAG_LOG
 		if ((zc++ & 0xFFu) == 0)
 			SKSE::log::info("[SLF-B][zerobind] PS={} t102 zero + t103 SRV + s15 sampler bound @draw",
 				static_cast<void*>(ps));
+#endif
 		// B4c-v3: cb2 content at the pre-draw seam = the exact batch this
 		// draw's payload consumes. Decides the alignment question.
 		DrawTimePerSurfaceCB2(a_ctx);
@@ -859,6 +869,7 @@ namespace ShadowLimitFixNS::P1
 		const float* g1 = ShadowLimitFixNS::P1::g_shadowLights[1].pos;
 		const float* g2 = ShadowLimitFixNS::P1::g_shadowLights[2].pos;
 		const float* gs0 = ShadowLimitFixNS::P1::g_shadowLights[0].proj;
+#if SLF_DIAG_LOG
 		SKSE::log::info("[SLF] cb2 per-surface: lights={:.0f} shadow={:.0f} chmap=({:.0f},{:.0f},{:.0f},{:.0f})",
 			c29[0], c29[1], c2[0], c2[1], c2[2], c2[3]);
 		SKSE::log::info("[SLF] cb2 light[0..2] pos=({:.1f},{:.1f},{:.1f}) r={:.1f} | ({:.1f},{:.1f},{:.1f}) r={:.1f} | ({:.1f},{:.1f},{:.1f}) r={:.1f}",
@@ -867,6 +878,7 @@ namespace ShadowLimitFixNS::P1
 			g0[0], g0[1], g0[2], g1[0], g1[1], g1[2], g2[0], g2[1], g2[2],
 			ShadowLimitFixNS::P1::g_shadowLights[0].shadowMapIndex,
 			gs0[0], gs0[1], gs0[2], gs0[3]);
+#endif
 		a_ctx->Unmap(staging, 0);
 		staging->Release();
 		dev->Release();
@@ -1371,8 +1383,10 @@ namespace ShadowLimitFixNS::P1
 								if (((s_gateLog++) & 0x3Fu) == 0) {
 									const auto lc = ShadowLimitFixNS::P1::g_shadowLightCount.load(std::memory_order_acquire);
 									const auto sc = ShadowLimitFixNS::P1::g_scheduledShadowCount.load(std::memory_order_acquire);
+#if SLF_DIAG_LOG
 									SKSE::log::info("[SLF] BT diag lighting pass: skipPS={} lightCount={} scheduled={} shouldSwap={}",
 										a_skipPixelShader ? 1 : 0, lc, sc, (lc > 4) ? 1 : 0);
+#endif
 								}
 							}
 

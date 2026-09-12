@@ -1151,6 +1151,7 @@ namespace ShadowLimitFixNS::P1
 			}
 			return std::make_pair(in + out, det);
 		};
+#if SLF_DIAG_LOG
 		SKSE::log::info("[SLF][ACT] activeLights={} shadow={}",
 			static_cast<std::uint32_t>(curA.size()), static_cast<std::uint32_t>(curS.size()));
 		{
@@ -1163,6 +1164,9 @@ namespace ShadowLimitFixNS::P1
 			if (tot > 0)
 				SKSE::log::info("[SLF][ACT]   shadow churn={}{}", tot, det);
 		}
+#else
+		(void)churn;
+#endif
 		s_prevA = std::move(curA);
 		s_prevS = std::move(curS);
 	}

@@ -385,6 +385,15 @@ namespace ShadowLimitFixNS::P1
 // covers the 21-24 scheduled lights) and re-test the sun render.
 #define ENABLE_P1B 1
 
+// SLF_DIAG_LOG - per-frame diagnostic logging gate (2026-09-12).
+// 0 = compile out every per-frame / per-pass diagnostic log (BT diag
+//     lighting pass, cb2 per-surface, LightRec, [probe], [B4c][draw],
+//     [B5][dual], [ACT] churn, trace DRAW/slice, selfcheck, QA). These
+//     flooded ShadowLimitFix.log to 4.18MB in one session and taxed the
+//     render loop via spdlog I/O. One-shot install/error/warn logs stay.
+// 1 = emit them (crash forensics / flicker diagnosis only).
+#define SLF_DIAG_LOG 0
+
 // Skip the vanilla shadow-light render dispatch at the render-loop call
 // site (Hook_RenderShadowLights sets ctx.Rax=0). This recipe was cross-verified upstream,
 // where it is ONLY valid because CS fully owns scheduling + rendering.

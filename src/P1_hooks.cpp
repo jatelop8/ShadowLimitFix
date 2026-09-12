@@ -3333,6 +3333,23 @@ namespace ShadowLimitFixNS::P1
 		auto* ssn = ssnPtr ? static_cast<RE::ShadowSceneNode*>(ssnPtr) : nullptr;
 		auto* shader = shaderProp ? static_cast<RE::BSLightingShaderProperty*>(shaderProp) : nullptr;
 
+		// fix109 crash guard (2026-09-12): only BSLightingShaderProperty
+		// surfaces get the all-lit injection. Effect surfaces
+		// (BSEffectShaderProperty, e.g. NAT\Mist.nif fog) share this call but
+		// their downstream light consumer reads a DIFFERENT table layout; a
+		// lighting-layout table crashed it with a null light deref
+		// (crash 09-11 15:11, RBX=0 @ SkyrimSE+14EAFFA). Keep them on the
+		// vanilla lightData->lights path.
+		bool isLightingSurface = false;
+		if (shaderProp) {
+			auto* sp = static_cast<RE::BSShaderProperty*>(shaderProp);
+			if (const auto* rtti = sp->GetRTTI()) {
+				if (const char* nm = rtti->GetName()) {
+					isLightingSurface = (std::strstr(nm, "LightingShaderProperty") != nullptr);
+				}
+			}
+		}
+
 		// Sun/cloud resolution (vanilla contract: lights[0] always written).
 		RE::BSLight* sun = nullptr;
 		if (ssn && shader) {
@@ -3355,7 +3372,7 @@ namespace ShadowLimitFixNS::P1
 
 		// Step 1: active shadow lights (engine distance-sorted) - bypasses
 		// the lightData->lights distance cull so lamps stay lit at range.
-		if (addShadow && ssn) {
+		if (isLightingSurface && addShadow && ssn) {
 			for (auto& sp : ssn->GetRuntimeData().activeShadowLights) {
 				if (added >= maxCount)
 					break;
@@ -3375,7 +3392,7 @@ namespace ShadowLimitFixNS::P1
 		}
 
 		// Step 2: active non-shadow lights.
-		if (ssn) {
+		if (isLightingSurface && ssn) {
 			for (auto& sp : ssn->GetRuntimeData().activeLights) {
 				if (added >= maxCount)
 					break;
