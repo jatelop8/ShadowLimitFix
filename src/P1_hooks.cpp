@@ -3372,9 +3372,16 @@ namespace ShadowLimitFixNS::P1
 
 		// Step 1: active shadow lights (engine distance-sorted) - bypasses
 		// the lightData->lights distance cull so lamps stay lit at range.
+		// fix109 v2 (2026-09-12): cap at the vanilla 4-shadow clamp
+		// (cb2[29].y = min(shadow,4)). Injecting every activeShadowLights
+		// entry (28+) filled the whole batch and starved the non-shadow
+		// lights - QuickLight's handheld omni light lives in activeLights,
+		// so it never got a slot and the player's quick-light stayed dark.
+		// Cap shadow lights at 4 and leave the rest of the batch for the
+		// non-shadow lights (Step 2).
 		if (isLightingSurface && addShadow && ssn) {
 			for (auto& sp : ssn->GetRuntimeData().activeShadowLights) {
-				if (added >= maxCount)
+				if (added >= maxCount || *shadowCount >= 4)
 					break;
 				auto* sl = sp.get();
 				if (!sl)
