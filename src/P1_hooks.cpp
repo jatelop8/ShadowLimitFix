@@ -3392,12 +3392,12 @@ namespace ShadowLimitFixNS::P1
 			}
 		}
 
-		// Step 2: the nearest non-shadow light (QuickLight's handheld omni
-		// light lives here). Inject ONE only so the diffuse slots stay
-		// available for the remaining shadow lamps in Step 3. The engine
-		// consumes the first 7 slots (sun + 4 shadow + 1 non-shadow + 1
-		// extra shadow), so dropping extra non-shadow lights here keeps the
-		// shadow lamps lit instead of starving them.
+		// Step 2: ALL non-shadow lights (QuickLight's handheld omni + any
+		// ambient/omni lamps). Inject every one so no non-shadow light is
+		// left dark. The non-shadow lights are few (2-3), so they only
+		// displace a couple of the distant shadow lamps in Step 3 - the
+		// near shadow lamps stay lit and the batch still carries ~20+
+		// shadow lamps, matching the v1 "all shadow lamps stay lit" goal.
 		if (isLightingSurface && ssn) {
 			for (auto& sp : ssn->GetRuntimeData().activeLights) {
 				if (added >= maxCount)
@@ -3410,7 +3410,6 @@ namespace ShadowLimitFixNS::P1
 				if (isDup(l))
 					continue;
 				lights[added++] = l;
-				break;  // nearest non-shadow light only
 			}
 		}
 
